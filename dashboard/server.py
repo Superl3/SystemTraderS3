@@ -34,6 +34,40 @@ RUNS_DIR = ROOT_DIR / "runs"
 FIXTURES_DIR = ROOT_DIR / "tests" / "fixtures"
 DATASETS_DIR = ROOT_DIR / "datasets"
 STRATEGY_CONFIGS_DIR = ROOT_DIR / "configs" / "strategies"
+STRATEGY_CATALOG = [
+    {
+        "name": "BuyAndHold",
+        "description": "Buy a fixed quantity once for each available symbol or a configured target symbol.",
+        "params": [
+            {"name": "quantity", "type": "decimal", "default": "1", "label": "Quantity"},
+            {"name": "target_symbol", "type": "text", "default": "", "label": "Target Symbol"},
+        ],
+    },
+    {
+        "name": "MovingAverageCross",
+        "description": "Trade a deterministic short/long simple moving average cross.",
+        "params": [
+            {"name": "short_window", "type": "integer", "default": 2, "label": "Short Window"},
+            {"name": "long_window", "type": "integer", "default": 3, "label": "Long Window"},
+            {"name": "quantity", "type": "decimal", "default": "1", "label": "Quantity"},
+            {"name": "target_symbol", "type": "text", "default": "", "label": "Target Symbol"},
+        ],
+    },
+    {
+        "name": "EqualWeightRebalance",
+        "description": "Emit equal target weights across all currently available symbols on the first tick.",
+        "params": [],
+    },
+    {
+        "name": "PeriodicFactorWeight",
+        "description": "Every N ticks, target equal weights in the top-K symbols for a configured factor.",
+        "params": [
+            {"name": "factor_name", "type": "text", "default": "momentum", "label": "Factor Name"},
+            {"name": "rebalance_interval", "type": "integer", "default": 5, "label": "Rebalance Interval"},
+            {"name": "top_k", "type": "integer", "default": 10, "label": "Top K"},
+        ],
+    },
+]
 
 # Helper to serialize Decimals to float/str in JSON
 class DecimalEncoder(json.JSONEncoder):
@@ -161,6 +195,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.handle_list_configs()
             return
 
+        # GET /api/strategies - List strategy catalog for form-driven config editing
+        elif path == "/api/strategies":
+            self.handle_list_strategies()
+            return
+
         # Fallback to 404
         self.send_error_json(404, f"Path {path} not found")
 
@@ -271,6 +310,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "payload": json_to_dict(entry),
                     })
         self.send_json_response(200, {"configs": configs})
+
+    def handle_list_strategies(self):
+        self.send_json_response(200, {"strategies": STRATEGY_CATALOG})
 
     def handle_run_simulation(self):
         content_length = int(self.headers.get('Content-Length', 0))

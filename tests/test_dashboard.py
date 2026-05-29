@@ -47,6 +47,19 @@ class DashboardApiTests(unittest.TestCase):
         )
         self.assertEqual("PeriodicFactorWeight", periodic_config["payload"]["strategy_name"])
 
+    def test_dashboard_lists_strategy_catalog_for_form_driven_config(self) -> None:
+        with self._running_server() as base_url:
+            payload = self._get_json(f"{base_url}/api/strategies")
+
+        strategies = {item["name"]: item for item in payload["strategies"]}
+        self.assertEqual(
+            {"BuyAndHold", "MovingAverageCross", "EqualWeightRebalance", "PeriodicFactorWeight"},
+            set(strategies),
+        )
+        periodic_param_names = {item["name"] for item in strategies["PeriodicFactorWeight"]["params"]}
+        self.assertEqual({"factor_name", "rebalance_interval", "top_k"}, periodic_param_names)
+        self.assertEqual("momentum", strategies["PeriodicFactorWeight"]["params"][0]["default"])
+
     def test_dashboard_simulate_endpoint_exports_and_metrics_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dashboard_server.RUNS_DIR = Path(tmp) / "runs"

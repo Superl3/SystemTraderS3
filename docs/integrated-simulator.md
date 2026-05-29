@@ -124,8 +124,9 @@ The dashboard lists:
 - drop-in datasets from `datasets`;
 - fixture configs from `tests/fixtures/*.json`;
 - strategy configs from `configs/strategies/*.json`.
+- registered strategies and their editable parameters from `/api/strategies`.
 
-Before launching a run, the dashboard copies the selected config into an editable JSON textarea. Editing that JSON changes the strategy for that run without modifying files on disk.
+Before launching a run, the dashboard can copy a selected config into an editable JSON textarea or generate the config JSON from a strategy form. Editing that JSON changes the strategy for that run without modifying files on disk.
 
 ## Object Boundaries
 

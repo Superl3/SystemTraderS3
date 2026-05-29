@@ -567,7 +567,9 @@
             border: 1px solid var(--border-color);
             border-radius: var(--card-radius);
             width: 100%;
-            max-width: 500px;
+            max-width: 680px;
+            max-height: calc(100vh - 48px);
+            overflow-y: auto;
             padding: 32px;
             box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
             transform: translateY(-20px);
@@ -631,6 +633,22 @@
         .form-control:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 2px var(--primary-glow);
+        }
+
+        .strategy-param-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+
+        .strategy-param-grid .form-group {
+            margin-bottom: 0;
+        }
+
+        .form-help {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            line-height: 1.4;
         }
 
         .btn-submit {
@@ -920,8 +938,17 @@
                     </select>
                 </div>
                 <div class="form-group">
+                    <label class="form-label" for="strategySelect">Strategy</label>
+                    <select class="form-control" id="strategySelect">
+                        <!-- Dynamic options -->
+                    </select>
+                    <div class="form-help" id="strategyDescription">Select a strategy to generate editable JSON.</div>
+                </div>
+                <div class="strategy-param-grid" id="strategyParamFields"></div>
+                <div class="form-group">
                     <label class="form-label" for="strategyConfigJson">Strategy Config JSON</label>
                     <textarea class="form-control" id="strategyConfigJson" rows="10" spellcheck="false" placeholder='{"initial_cash":"100000","strategy_name":"EqualWeightRebalance","strategy_params":{}}'></textarea>
+                    <div class="form-help">This JSON is sent with the run. The form above regenerates it; direct edits are kept as the final override.</div>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="initialCash">초기 투자 자금 (Initial Cash)</label>
@@ -949,6 +976,7 @@
         let drawdownChartInstance = null;
         let currentTrades = [];
         let strategyConfigPayloads = {};
+        let strategyCatalog = [];
 
         // App Initialisation
         window.addEventListener('DOMContentLoaded', () => {
@@ -1351,6 +1379,12 @@
                     dsSelect.appendChild(opt);
                 });
 
+                // Populate strategies
+                const strategyRes = await fetch('/api/strategies');
+                const strategyData = await strategyRes.json();
+                strategyCatalog = strategyData.strategies || [];
+                populateStrategySelect();
+
                 // Populate configs
                 const confRes = await fetch('/api/configs');
                 const confData = await confRes.json();
@@ -1369,9 +1403,17 @@
                     const editor = document.getElementById('strategyConfigJson');
                     if (!confSelect.value) {
                         editor.value = '';
+                        applyConfigPayloadToForm(null);
                         return;
                     }
-                    editor.value = JSON.stringify(strategyConfigPayloads[confSelect.value] || {}, null, 2);
+                    const payload = strategyConfigPayloads[confSelect.value] || {};
+                    applyConfigPayloadToForm(payload);
+                    editor.value = JSON.stringify(payload, null, 2);
+                };
+                document.getElementById('initialCash').oninput = () => {
+                    if (document.getElementById('strategySelect').value || document.getElementById('strategyConfigJson').value.trim()) {
+                        syncStrategyFormToJson();
+                    }
                 };
                 if (confSelect.value) {
                     confSelect.onchange();
@@ -1379,6 +1421,126 @@
             } catch (err) {
                 console.error("Error loading simulation options:", err);
             }
+        }
+
+        function populateStrategySelect() {
+            const strategySelect = document.getElementById('strategySelect');
+            strategySelect.innerHTML = '<option value="">Engine default: buy_and_hold_one_unit</option>';
+            strategyCatalog.forEach(strategy => {
+                const opt = document.createElement('option');
+                opt.value = strategy.name;
+                opt.textContent = strategy.name;
+                strategySelect.appendChild(opt);
+            });
+            strategySelect.onchange = () => {
+                renderStrategyParams();
+                syncStrategyFormToJson();
+            };
+            renderStrategyParams();
+        }
+
+        function selectedStrategyMeta() {
+            const strategyName = document.getElementById('strategySelect').value;
+            return strategyCatalog.find(strategy => strategy.name === strategyName) || null;
+        }
+
+        function applyConfigPayloadToForm(payload) {
+            const strategySelect = document.getElementById('strategySelect');
+            const initialCash = document.getElementById('initialCash');
+            if (!payload) {
+                strategySelect.value = '';
+                renderStrategyParams();
+                return;
+            }
+            if (payload.initial_cash !== undefined) {
+                initialCash.value = String(payload.initial_cash);
+            }
+            strategySelect.value = payload.strategy_name || '';
+            renderStrategyParams(payload.strategy_params || {});
+        }
+
+        function renderStrategyParams(values = {}) {
+            const container = document.getElementById('strategyParamFields');
+            const description = document.getElementById('strategyDescription');
+            const meta = selectedStrategyMeta();
+            container.innerHTML = '';
+            if (!meta) {
+                description.textContent = 'Use the engine default strategy when no config JSON is provided.';
+                return;
+            }
+            description.textContent = meta.description || '';
+            meta.params.forEach(param => {
+                const group = document.createElement('div');
+                group.className = 'form-group';
+
+                const label = document.createElement('label');
+                label.className = 'form-label';
+                label.setAttribute('for', `strategyParam_${param.name}`);
+                label.textContent = param.label || param.name;
+
+                const input = document.createElement('input');
+                input.className = 'form-control';
+                input.id = `strategyParam_${param.name}`;
+                input.dataset.paramName = param.name;
+                input.dataset.paramType = param.type;
+                input.type = param.type === 'text' ? 'text' : 'number';
+                if (param.type === 'decimal') {
+                    input.step = 'any';
+                } else if (param.type === 'integer') {
+                    input.step = '1';
+                }
+                input.value = values[param.name] !== undefined ? String(values[param.name]) : String(param.default ?? '');
+                input.oninput = syncStrategyFormToJson;
+
+                group.appendChild(label);
+                group.appendChild(input);
+                container.appendChild(group);
+            });
+        }
+
+        function syncStrategyFormToJson() {
+            const editor = document.getElementById('strategyConfigJson');
+            const config = buildConfigFromStrategyForm();
+            editor.value = config ? JSON.stringify(config, null, 2) : '';
+        }
+
+        function buildConfigFromStrategyForm() {
+            const meta = selectedStrategyMeta();
+            if (!meta) {
+                return null;
+            }
+            const editor = document.getElementById('strategyConfigJson');
+            let current = {};
+            if (editor.value.trim()) {
+                try {
+                    const parsed = JSON.parse(editor.value);
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        current = parsed;
+                    }
+                } catch (err) {
+                    current = {};
+                }
+            }
+
+            const strategyParams = {};
+            document.querySelectorAll('#strategyParamFields input[data-param-name]').forEach(input => {
+                const rawValue = input.value.trim();
+                if (rawValue === '') {
+                    return;
+                }
+                if (input.dataset.paramType === 'integer') {
+                    strategyParams[input.dataset.paramName] = Number.parseInt(rawValue, 10);
+                } else {
+                    strategyParams[input.dataset.paramName] = rawValue;
+                }
+            });
+
+            return {
+                ...current,
+                initial_cash: document.getElementById('initialCash').value || '100000',
+                strategy_name: meta.name,
+                strategy_params: strategyParams
+            };
         }
 
         // Form Submission handler to trigger simulation run via API

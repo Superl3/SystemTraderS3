@@ -112,7 +112,7 @@ Drop-in simulator objects:
 - datasets can be dropped under `datasets/<dataset_id>/` when they contain `market_prices.csv` or `*_prices.csv`;
 - strategy configs can be dropped under `configs/strategies/*.json`;
 - the simulator CLI accepts arbitrary dataset and config paths;
-- the dashboard lists both fixture and drop-in datasets/configs, and allows direct JSON strategy editing before a run.
+- the dashboard lists both fixture and drop-in datasets/configs, exposes the static strategy catalog, and can generate editable strategy JSON from a form before a run.
 
 MVP2 export:
 
