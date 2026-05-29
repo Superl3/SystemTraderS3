@@ -7,9 +7,9 @@ The current baseline has four CLI layers:
 1. `audit`: read-only structural audit for generated or provided simulation datasets.
 2. `simulate`: config-driven paper-trading loop using simulated market prices.
 3. `validate_run`: replay validation for exported simulation run artifacts.
-4. `metrics`: deterministic post-run baseline metrics from exported artifacts.
+4. `metrics`: deterministic post-run baseline and benchmark-relative metrics from exported artifacts.
 
-The long-term thesis is that strategies are presets running on common base rules. A future system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before benchmark-relative evaluation, risk rules, richer strategy modeling, or live integration.
+The long-term thesis is that strategies are presets running on common base rules. The system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before risk rules, richer strategy modeling, factor exposure modeling, or live integration.
 
 ## Quickstart
 
@@ -34,7 +34,7 @@ rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config 
 rtk python -m system_trading_s3.audit $run
 rtk python -m system_trading_s3.validate_run $run
 
-# MVP5: write deterministic baseline metrics
+# MVP5/MVP6: write deterministic baseline and benchmark-relative metrics
 rtk python -m system_trading_s3.metrics $run
 ```
 
@@ -48,6 +48,7 @@ All commands are local and simulated. `audit` and `validate_run` are read-only. 
 - MVP3 completed: run artifact replay and baseline accounting validation.
 - MVP4 completed: config-driven strategy selection from a static registry.
 - MVP5 completed: deterministic transaction friction and post-run baseline metrics.
+- MVP6 completed: engine-integrated benchmark logging and benchmark-relative metrics.
 
 ## MVP Responsibilities
 
@@ -69,6 +70,7 @@ MVP4 config-driven execution:
 - accepts `--config <json>`;
 - reads `initial_cash`, `strategy_name`, and `strategy_params`;
 - optionally reads `friction.fee_rate` and `friction.slippage_per_trade`;
+- optionally reads `risk_free_rate` for Sharpe ratio calculations;
 - supports a static registry with `BuyAndHold` and `MovingAverageCross`;
 - keeps strategies as order-intent generators while the engine owns account mutation.
 
@@ -77,17 +79,19 @@ MVP2 export:
 - writes deterministic artifacts: `run_manifest.json`, `equity_curve.csv`, `trades.csv`, `orders.csv`, `fills.csv`, `account_summary.json`, and `audit_summary.json`;
 - does not fabricate benchmark or factor files;
 - records optional audit gaps as gaps, not failures.
+- records optional `benchmark_price` and `benchmark_equity` columns in `equity_curve.csv` when `benchmark_prices.csv` is available.
 
 MVP3 validate_run:
 
 - reads an exported run without rerunning simulation;
 - validates required artifacts, manifest/account consistency, order/fill consistency, friction-aware accounting replay, final equity, current trades/fills mapping, and audit summary status.
 
-MVP5 metrics:
+MVP5/MVP6 metrics:
 
 - reads exported `equity_curve.csv` and `trades.csv`;
 - writes deterministic `metrics.json`;
 - calculates total return, CAGR using equity row intervals with 252 trading days/year, max drawdown, realized-PnL win rate, profit factor, and trade counts;
+- calculates alpha, beta, Sharpe ratio, tracking error, and information ratio when benchmark equity is available;
 - reports `UNAVAILABLE` and gaps rather than inferring missing realized PnL.
 
 ## Audit Status
@@ -114,6 +118,8 @@ Optional:
 - `benchmark.csv`
 - `factor_exposure.csv`
 
+MVP1+ simulation also accepts optional `benchmark_prices.csv` with `timestamp,symbol,price`. The simulator forward-fills benchmark prices onto market timestamps and normalizes benchmark equity from the same initial cash.
+
 CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are accepted. Header whitespace is trimmed, header names remain case-sensitive, unknown extra columns are allowed, and blank required cells are treated as missing rather than zero.
 
 ## Non-Goals
@@ -125,8 +131,8 @@ CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are a
 - No optimization.
 - No opaque ML prediction.
 - No dashboard.
-- No benchmark-relative metrics yet.
-- No risk-adjusted or benchmark/factor-relative metrics such as Sharpe, beta, tracking error, capture, or turnover yet.
+- No factor-relative metrics yet.
+- No richer risk-adjusted metrics such as Sortino, capture, or turnover yet.
 - No claim that any strategy is profitable.
 
 See `schemas/` for the exact contracts and `docs/mvp-foundation.md` for the staged roadmap and limitations.

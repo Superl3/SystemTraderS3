@@ -17,7 +17,7 @@ from system_trading_s3 import audit
 PASS = "PASS"
 FAIL = "FAIL"
 UNAVAILABLE = "UNAVAILABLE"
-METRICS_SCHEMA_VERSION = "mvp5.metrics.v1"
+METRICS_SCHEMA_VERSION = "mvp6.metrics.v1"
 METRICS_FILE_NAME = "metrics.json"
 TRADING_DAYS_PER_YEAR = Decimal("252")
 METRIC_QUANT = Decimal("0.000001")
@@ -31,6 +31,7 @@ class MetricsError(Exception):
 class EquityMetricRow:
     timestamp: str
     equity: Decimal
+    benchmark_equity: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ def calculate_metrics(run_artifact_dir: Path | str) -> MetricsResult:
     try:
         equity_rows = _load_equity_rows(run_dir / "equity_curve.csv")
         realized_pnls, total_trade_count, missing_realized_count = _load_realized_pnls(run_dir / "trades.csv")
+        risk_free_rate = _load_risk_free_rate(run_dir / "run_manifest.json", gaps)
     except MetricsError as exc:
         return MetricsResult(status=FAIL, payload=_failed_payload([str(exc)]), errors=[str(exc)])
 
@@ -60,6 +62,7 @@ def calculate_metrics(run_artifact_dir: Path | str) -> MetricsResult:
         missing_realized_count=missing_realized_count,
         gaps=gaps,
     )
+    benchmark_relative = _benchmark_relative_metrics(equity_rows, risk_free_rate, gaps)
 
     payload: dict[str, Any] = {
         "schema_version": METRICS_SCHEMA_VERSION,
@@ -73,6 +76,7 @@ def calculate_metrics(run_artifact_dir: Path | str) -> MetricsResult:
         "profit_factor": _format_profit_factor(profit_factor),
         "total_number_of_trades": total_trade_count,
         "realized_trade_count": len(realized_pnls),
+        "benchmark_relative": benchmark_relative,
         "gaps": gaps,
     }
     return MetricsResult(status=PASS, payload=payload, errors=[])
@@ -101,6 +105,17 @@ def format_metrics_result(result: MetricsResult, metrics_path: Path | None = Non
     ]:
         if key in payload:
             lines.append(f"{label}: {payload[key]}")
+    benchmark_relative = payload.get("benchmark_relative")
+    if isinstance(benchmark_relative, dict):
+        lines.append("BENCHMARK RELATIVE:")
+        for key, label in [
+            ("alpha_pct", "ALPHA PCT"),
+            ("beta", "BETA"),
+            ("sharpe_ratio", "SHARPE RATIO"),
+            ("tracking_error_pct", "TRACKING ERROR PCT"),
+            ("information_ratio", "INFORMATION RATIO"),
+        ]:
+            lines.append(f"- {label}: {benchmark_relative.get(key, UNAVAILABLE)}")
     lines.append("GAPS:")
     gaps = payload.get("gaps", [])
     if isinstance(gaps, list) and gaps:
@@ -145,6 +160,7 @@ def _load_equity_rows(path: Path) -> list[EquityMetricRow]:
             EquityMetricRow(
                 timestamp=timestamp,
                 equity=_parse_decimal("equity_curve.csv", index, "equity", row.get("equity", "")),
+                benchmark_equity=_parse_optional_decimal("equity_curve.csv", index, "benchmark_equity", row.get("benchmark_equity")),
             )
         )
     if not equity_rows:
@@ -182,6 +198,38 @@ def _parse_decimal(file_name: str, row_number: int, column: str, value: str) -> 
     parsed = audit._parse_decimal(value)
     if parsed is None:
         raise MetricsError(f"{file_name} row {row_number} has invalid decimal {column}.")
+    return parsed
+
+
+def _parse_optional_decimal(file_name: str, row_number: int, column: str, value: str | None) -> Decimal | None:
+    if value is None or audit._is_blank(value):
+        return None
+    return _parse_decimal(file_name, row_number, column, value)
+
+
+def _load_risk_free_rate(path: Path, gaps: list[str]) -> Decimal:
+    if not path.is_file():
+        gaps.append("run_manifest.json missing; risk_free_rate defaulted to 0.")
+        return Decimal("0")
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        gaps.append("run_manifest.json unreadable; risk_free_rate defaulted to 0.")
+        return Decimal("0")
+    if not isinstance(payload, dict):
+        gaps.append("run_manifest.json invalid; risk_free_rate defaulted to 0.")
+        return Decimal("0")
+    value = payload.get("risk_free_rate", "0")
+    if isinstance(value, (int, float)):
+        value = str(value)
+    if not isinstance(value, str):
+        gaps.append("run_manifest.json risk_free_rate invalid; defaulted to 0.")
+        return Decimal("0")
+    parsed = audit._parse_decimal(value)
+    if parsed is None:
+        gaps.append("run_manifest.json risk_free_rate invalid; defaulted to 0.")
+        return Decimal("0")
     return parsed
 
 
@@ -250,6 +298,135 @@ def _trade_outcome_metrics(
         gaps.append("profit_factor unavailable because gross profit and gross loss are both zero.")
         return win_rate, None
     return win_rate, gross_profit / gross_loss
+
+
+def _benchmark_relative_metrics(
+    equity_rows: list[EquityMetricRow],
+    risk_free_rate: Decimal,
+    top_level_gaps: list[str],
+) -> dict[str, str | bool]:
+    gaps: list[str] = []
+    unavailable = _unavailable_benchmark_relative(risk_free_rate, benchmark_available=False, gaps=gaps)
+    if any(row.benchmark_equity is None for row in equity_rows):
+        gaps.append("benchmark_relative unavailable because benchmark_equity is missing.")
+        top_level_gaps.extend(gaps)
+        return unavailable | {"gaps": "; ".join(gaps)}
+
+    strategy_returns = _period_returns([row.equity for row in equity_rows], "strategy equity", gaps)
+    benchmark_returns = _period_returns(
+        [row.benchmark_equity for row in equity_rows if row.benchmark_equity is not None],
+        "benchmark equity",
+        gaps,
+    )
+    if strategy_returns is None or benchmark_returns is None or len(strategy_returns) != len(benchmark_returns):
+        top_level_gaps.extend(gaps)
+        return unavailable | {"gaps": "; ".join(gaps)}
+
+    benchmark_available = True
+    active_returns = [strategy - benchmark for strategy, benchmark in zip(strategy_returns, benchmark_returns)]
+    alpha = _mean(active_returns) * TRADING_DAYS_PER_YEAR * Decimal("100")
+    benchmark_variance = _variance(benchmark_returns)
+    beta: Decimal | None = None
+    if benchmark_variance is None or benchmark_variance == 0:
+        gaps.append("beta unavailable because benchmark return variance is zero or insufficient.")
+    else:
+        covariance = _covariance(strategy_returns, benchmark_returns)
+        beta = None if covariance is None else covariance / benchmark_variance
+
+    sharpe = _sharpe_ratio(strategy_returns, risk_free_rate, gaps)
+    tracking_error = _annualized_std(active_returns)
+    information_ratio: Decimal | None = None
+    if tracking_error is None:
+        gaps.append("tracking_error_pct unavailable because active returns are insufficient.")
+    elif tracking_error == 0:
+        gaps.append("information_ratio unavailable because tracking error is zero.")
+    else:
+        information_ratio = (_mean(active_returns) * TRADING_DAYS_PER_YEAR) / tracking_error
+
+    top_level_gaps.extend(gaps)
+    return {
+        "benchmark_available": benchmark_available,
+        "risk_free_rate": _format_decimal(risk_free_rate),
+        "alpha_pct": _format_optional_metric(alpha),
+        "beta": _format_optional_metric(beta),
+        "sharpe_ratio": _format_optional_metric(sharpe),
+        "tracking_error_pct": _format_optional_metric(None if tracking_error is None else tracking_error * Decimal("100")),
+        "information_ratio": _format_optional_metric(information_ratio),
+        "gaps": "; ".join(gaps),
+    }
+
+
+def _unavailable_benchmark_relative(
+    risk_free_rate: Decimal,
+    benchmark_available: bool,
+    gaps: list[str],
+) -> dict[str, str | bool]:
+    return {
+        "benchmark_available": benchmark_available,
+        "risk_free_rate": _format_decimal(risk_free_rate),
+        "alpha_pct": UNAVAILABLE,
+        "beta": UNAVAILABLE,
+        "sharpe_ratio": UNAVAILABLE,
+        "tracking_error_pct": UNAVAILABLE,
+        "information_ratio": UNAVAILABLE,
+        "gaps": "; ".join(gaps),
+    }
+
+
+def _period_returns(values: list[Decimal], label: str, gaps: list[str]) -> list[Decimal] | None:
+    if len(values) < 2:
+        gaps.append(f"{label} returns unavailable because fewer than two observations are present.")
+        return None
+    returns: list[Decimal] = []
+    for index in range(1, len(values)):
+        previous = values[index - 1]
+        current = values[index]
+        if previous <= 0:
+            gaps.append(f"{label} returns unavailable because a previous value is nonpositive.")
+            return None
+        returns.append((current - previous) / previous)
+    return returns
+
+
+def _mean(values: list[Decimal]) -> Decimal:
+    return sum(values, Decimal("0")) / Decimal(len(values))
+
+
+def _variance(values: list[Decimal]) -> Decimal | None:
+    if len(values) < 2:
+        return None
+    mean = _mean(values)
+    return sum(((value - mean) ** 2 for value in values), Decimal("0")) / Decimal(len(values))
+
+
+def _covariance(first: list[Decimal], second: list[Decimal]) -> Decimal | None:
+    if len(first) != len(second) or len(first) < 2:
+        return None
+    first_mean = _mean(first)
+    second_mean = _mean(second)
+    total = sum(((left - first_mean) * (right - second_mean) for left, right in zip(first, second)), Decimal("0"))
+    return total / Decimal(len(first))
+
+
+def _annualized_std(values: list[Decimal]) -> Decimal | None:
+    variance = _variance(values)
+    if variance is None:
+        return None
+    with localcontext() as context:
+        context.prec = 50
+        return (variance * TRADING_DAYS_PER_YEAR).sqrt()
+
+
+def _sharpe_ratio(strategy_returns: list[Decimal], risk_free_rate: Decimal, gaps: list[str]) -> Decimal | None:
+    annualized_std = _annualized_std(strategy_returns)
+    if annualized_std is None:
+        gaps.append("sharpe_ratio unavailable because strategy returns are insufficient.")
+        return None
+    if annualized_std == 0:
+        gaps.append("sharpe_ratio unavailable because annualized strategy volatility is zero.")
+        return None
+    annualized_return = _mean(strategy_returns) * TRADING_DAYS_PER_YEAR
+    return (annualized_return - risk_free_rate) / annualized_std
 
 
 def _format_optional_metric(value: Decimal | None) -> str:

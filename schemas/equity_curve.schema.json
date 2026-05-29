@@ -11,7 +11,7 @@
   "key_columns": ["timestamp"],
   "numeric_fields": {
     "required": ["equity"],
-    "optional": ["portfolio_value"]
+    "optional": ["portfolio_value", "benchmark_price", "benchmark_equity"]
   },
   "nonnegative_fields": [],
   "enum_fields": {},

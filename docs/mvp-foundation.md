@@ -4,7 +4,7 @@
 
 This project is not an alpha-discovery bot and must not promise profit. Strategies are presets running on common base rules. Losses may be acceptable when they come from intended market or factor exposure. Unexplained, excessive, structural, execution, system, data, or order-related losses are failure signals that later phases should classify explicitly.
 
-The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation, to basic post-run metrics. It does not yet attempt benchmark-relative evaluation, risk classification, or claims about strategy quality.
+The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation, to basic post-run metrics and benchmark-relative metrics. It does not yet attempt factor exposure modeling, risk classification, or claims about strategy quality.
 
 ## Non-Goals
 
@@ -65,13 +65,13 @@ MVP3 validate:
 rtk python -m system_trading_s3.validate_run <run_dir>
 ```
 
-MVP5 metrics:
+MVP5/MVP6 metrics:
 
 ```powershell
 rtk python -m system_trading_s3.metrics <run_dir>
 ```
 
-`market_prices.csv` is the true simulation input for MVP1+. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
+`market_prices.csv` is the true simulation input for MVP1+. Optional `benchmark_prices.csv` is read by the simulation engine, forward-filled onto market timestamps, and exported as normalized benchmark equity. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
 
 ## CSV Policy
 
@@ -107,7 +107,9 @@ Completed MVP4: config-driven execution with a static strategy registry.
 
 Completed MVP5: deterministic transaction friction and post-run baseline metrics.
 
-Candidate MVP6: benchmark and factor-relative metrics using explicit target series.
+Completed MVP6: engine-integrated benchmark logging and benchmark-relative metrics.
+
+Candidate MVP7: factor exposure inputs and factor-relative metrics using explicit target series.
 
 Later phase: richer risk-adjusted metrics.
 
@@ -128,14 +130,15 @@ Later phase: small-capital live validation criteria only.
 - Config-driven runs support only `BuyAndHold` and `MovingAverageCross`.
 - Immediate fills only.
 - Friction is deterministic only: percentage fee plus fixed slippage per fill.
+- Benchmark synchronization is deterministic forward-fill only.
 - No partial fills.
 - No richer order lifecycle.
 - No risk budget, sizing model, exposure limits, cooldown, or kill switch.
-- No generated benchmark or factor exposure data.
-- Performance metrics are baseline-only: total return, row-interval CAGR, max drawdown, realized-PnL win rate, profit factor, and trade counts.
-- No benchmark-relative or factor-relative analysis.
+- No generated factor exposure data.
+- Performance metrics are still narrow: total return, row-interval CAGR, max drawdown, realized-PnL win rate, profit factor, trade counts, alpha, beta, Sharpe ratio, tracking error, and information ratio.
+- No factor-relative analysis yet.
 - No live trading, broker integration, dashboard, optimization, or ML.
 
 ## Future Data Requirements
 
-Later phases need benchmark series, factor exposure series, complete cost/slippage fields, stable run identifiers, data source provenance, simulated order lifecycle events, live shadow observations, and explicit target market/factor definitions. Missing data should remain a reported gap rather than invented precision.
+Later phases need factor exposure series, complete cost/slippage fields, stable run identifiers, data source provenance, simulated order lifecycle events, live shadow observations, and explicit target market/factor definitions. Missing data should remain a reported gap rather than invented precision.

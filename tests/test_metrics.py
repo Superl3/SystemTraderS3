@@ -31,7 +31,13 @@ def export_friction_config_run(root: Path) -> Path:
     export_dir = root / "run"
     config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
     strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
-    result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy, config.friction)
+    result = simulate.run_simulation(
+        FIXTURES / "valid_complete",
+        config.initial_cash,
+        strategy,
+        config.friction,
+        config.risk_free_rate,
+    )
     simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="metrics-friction-test")
     return export_dir
 
@@ -44,13 +50,15 @@ class MetricsTests(unittest.TestCase):
             payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
 
         self.assertEqual(metrics.PASS, result.status)
-        self.assertEqual("mvp5.metrics.v1", payload["schema_version"])
-        self.assertEqual("0.001000", payload["total_return_pct"])
+        self.assertEqual("mvp6.metrics.v1", payload["schema_version"])
+        self.assertEqual("0.002000", payload["total_return_pct"])
         self.assertEqual("0.000000", payload["max_drawdown_pct"])
         self.assertEqual("100.000000", payload["win_rate_pct"])
         self.assertEqual("INF", payload["profit_factor"])
         self.assertEqual(2, payload["total_number_of_trades"])
         self.assertEqual(1, payload["realized_trade_count"])
+        self.assertIn("benchmark_relative", payload)
+        self.assertNotEqual("UNAVAILABLE", payload["benchmark_relative"]["alpha_pct"])
         self.assertIn("realized_pnl missing for 1 of 2 trade rows.", payload["gaps"])
 
     def test_metrics_reports_unavailable_when_realized_pnl_missing(self) -> None:
@@ -64,6 +72,8 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual("UNAVAILABLE", payload["profit_factor"])
         self.assertEqual(1, payload["total_number_of_trades"])
         self.assertEqual(0, payload["realized_trade_count"])
+        self.assertNotEqual("UNAVAILABLE", payload["benchmark_relative"]["alpha_pct"])
+        self.assertEqual("0.020000", payload["benchmark_relative"]["risk_free_rate"])
         self.assertIn("win_rate_pct and profit_factor unavailable because no realized_pnl rows are available.", payload["gaps"])
 
     def test_metrics_calculates_drawdown_and_trade_outcomes(self) -> None:
@@ -88,6 +98,68 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual("50.000000", payload["win_rate_pct"])
         self.assertEqual("2.000000", payload["profit_factor"])
         self.assertNotEqual("UNAVAILABLE", payload["cagr_pct"])
+        self.assertEqual("UNAVAILABLE", payload["benchmark_relative"]["alpha_pct"])
+
+    def test_benchmark_relative_metrics_calculate_from_equity_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            write_file(
+                run_dir,
+                "run_manifest.json",
+                "{\"risk_free_rate\":\"0.01\"}\n",
+            )
+            write_file(
+                run_dir,
+                "equity_curve.csv",
+                "timestamp,equity,benchmark_equity\n"
+                "2026-01-01,100,100\n"
+                "2026-01-02,110,105\n"
+                "2026-01-03,121,110.25\n",
+            )
+            write_file(
+                run_dir,
+                "trades.csv",
+                "timestamp,trade_id,realized_pnl\n2026-01-02T09:30:00,T1,10\n",
+            )
+            result = metrics.write_metrics(run_dir)
+            payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(metrics.PASS, result.status)
+        relative = payload["benchmark_relative"]
+        self.assertEqual(True, relative["benchmark_available"])
+        self.assertEqual("1260.000000", relative["alpha_pct"])
+        self.assertEqual("UNAVAILABLE", relative["beta"])
+        self.assertEqual("UNAVAILABLE", relative["sharpe_ratio"])
+        self.assertEqual("0.000000", relative["tracking_error_pct"])
+        self.assertEqual("UNAVAILABLE", relative["information_ratio"])
+
+    def test_benchmark_relative_beta_and_volatility_math(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            write_file(run_dir, "run_manifest.json", "{\"risk_free_rate\":\"0.01\"}\n")
+            write_file(
+                run_dir,
+                "equity_curve.csv",
+                "timestamp,equity,benchmark_equity\n"
+                "2026-01-01,100,100\n"
+                "2026-01-02,110,105\n"
+                "2026-01-03,99,99.75\n",
+            )
+            write_file(
+                run_dir,
+                "trades.csv",
+                "timestamp,trade_id,realized_pnl\n2026-01-02T09:30:00,T1,10\n",
+            )
+            result = metrics.write_metrics(run_dir)
+            payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(metrics.PASS, result.status)
+        relative = payload["benchmark_relative"]
+        self.assertEqual("0.000000", relative["alpha_pct"])
+        self.assertEqual("2.000000", relative["beta"])
+        self.assertEqual("-0.006299", relative["sharpe_ratio"])
+        self.assertEqual("79.372539", relative["tracking_error_pct"])
+        self.assertEqual("0.000000", relative["information_ratio"])
 
     def test_metrics_output_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -61,6 +61,12 @@ class MarketPriceEvent:
 
 
 @dataclass(frozen=True)
+class BenchmarkSnapshot:
+    price: Decimal | None
+    equity: Decimal | None
+
+
+@dataclass(frozen=True)
 class Order:
     side: str
     symbol: str
@@ -111,6 +117,8 @@ class AccountSnapshot:
     symbol: str
     position_quantity: Decimal
     last_price: Decimal
+    benchmark_price: Decimal | None = None
+    benchmark_equity: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -126,11 +134,13 @@ class SimulationResult:
     fill_count: int
     final_equity: Decimal | None
     friction: FrictionModel
+    risk_free_rate: Decimal
     total_fees: Decimal
     total_slippage: Decimal
     fills: list[Fill]
     orders: list[OrderRecord]
     equity_curve: list[AccountSnapshot]
+    warnings: list[str]
     error: str | None = None
 
 
@@ -146,6 +156,7 @@ class SimulationConfig:
     strategy_name: str
     strategy_params: dict[str, object]
     friction: FrictionModel = FrictionModel()
+    risk_free_rate: Decimal = ZERO
 
 
 class Strategy(Protocol):
@@ -172,22 +183,10 @@ class DataFeed:
         if not path.is_file():
             raise SimulationInputError("market_prices.csv must be a file.")
 
-        events = _read_market_prices(path)
+        events = _read_market_prices(path, file_name="market_prices.csv")
         if len(events) < 2:
             raise SimulationInputError("market_prices.csv must contain at least two price rows.")
-
-        symbols = sorted({event.symbol for event in events})
-        if len(symbols) != 1:
-            raise SimulationInputError("market_prices.csv must contain exactly one symbol.")
-
-        previous: datetime | None = None
-        for event in events:
-            if previous is not None:
-                if not audit._timestamps_are_comparable(previous, event.timestamp):
-                    raise SimulationInputError("market_prices.csv cannot mix timezone-aware and timezone-naive timestamps.")
-                if event.timestamp <= previous:
-                    raise SimulationInputError("market_prices.csv timestamps must be strictly increasing.")
-            previous = event.timestamp
+        _validate_one_symbol_price_events(events, "market_prices.csv")
 
         return cls(events)
 
@@ -197,6 +196,49 @@ class DataFeed:
     @property
     def events(self) -> list[MarketPriceEvent]:
         return list(self._events)
+
+
+class BenchmarkFeed:
+    """Optional one-symbol benchmark price feed aligned to market events."""
+
+    def __init__(self, snapshots: dict[datetime, BenchmarkSnapshot], warnings: list[str]) -> None:
+        self._snapshots = snapshots
+        self.warnings = warnings
+
+    @classmethod
+    def from_dataset(
+        cls,
+        dataset_dir: Path | str,
+        market_events: list[MarketPriceEvent],
+        initial_cash: Decimal,
+    ) -> "BenchmarkFeed":
+        path = Path(dataset_dir) / "benchmark_prices.csv"
+        if not path.exists():
+            return cls(
+                snapshots={event.timestamp: BenchmarkSnapshot(price=None, equity=None) for event in market_events},
+                warnings=["benchmark_prices.csv missing; benchmark-relative metrics unavailable."],
+            )
+        if not path.is_file():
+            return cls(
+                snapshots={event.timestamp: BenchmarkSnapshot(price=None, equity=None) for event in market_events},
+                warnings=["benchmark_prices.csv is not a file; benchmark-relative metrics unavailable."],
+            )
+
+        try:
+            benchmark_events = _read_market_prices(path, file_name="benchmark_prices.csv")
+            _validate_one_symbol_price_events(benchmark_events, "benchmark_prices.csv")
+            return cls(
+                snapshots=_align_benchmark_to_market(market_events, benchmark_events, initial_cash),
+                warnings=[],
+            )
+        except SimulationInputError as exc:
+            return cls(
+                snapshots={event.timestamp: BenchmarkSnapshot(price=None, equity=None) for event in market_events},
+                warnings=[f"{exc} Benchmark-relative metrics unavailable."],
+            )
+
+    def snapshot_for(self, timestamp: datetime) -> BenchmarkSnapshot:
+        return self._snapshots.get(timestamp, BenchmarkSnapshot(price=None, equity=None))
 
 
 class SimulatedAccount:
@@ -359,11 +401,13 @@ class SimulationEngine:
     def __init__(
         self,
         feed: DataFeed,
+        benchmark_feed: BenchmarkFeed,
         account: SimulatedAccount,
         strategy: Strategy,
         execution: ExecutionSimulator,
     ) -> None:
         self.feed = feed
+        self.benchmark_feed = benchmark_feed
         self.account = account
         self.strategy = strategy
         self.execution = execution
@@ -397,6 +441,7 @@ class SimulationEngine:
     def _record_account_snapshot(self, event: MarketPriceEvent) -> None:
         position_quantity = self.account.positions.get(event.symbol, Decimal("0"))
         position_value = position_quantity * event.price
+        benchmark_snapshot = self.benchmark_feed.snapshot_for(event.timestamp)
         self.equity_curve.append(
             AccountSnapshot(
                 timestamp=event.timestamp,
@@ -406,6 +451,8 @@ class SimulationEngine:
                 symbol=event.symbol,
                 position_quantity=position_quantity,
                 last_price=event.price,
+                benchmark_price=benchmark_snapshot.price,
+                benchmark_equity=benchmark_snapshot.equity,
             )
         )
 
@@ -415,6 +462,7 @@ def run_simulation(
     initial_cash: Decimal = DEFAULT_INITIAL_CASH,
     strategy: Strategy | None = None,
     friction: FrictionModel = FrictionModel(),
+    risk_free_rate: Decimal = ZERO,
 ) -> SimulationResult:
     dataset_path = Path(dataset_dir)
     audit_status = _audit_status_for_context(dataset_path)
@@ -422,9 +470,10 @@ def run_simulation(
 
     try:
         feed = DataFeed.from_dataset(dataset_path)
+        benchmark_feed = BenchmarkFeed.from_dataset(dataset_path, feed.events, initial_cash)
         account = SimulatedAccount(initial_cash)
         selected_strategy = strategy if strategy is not None else BuyAndHoldOneUnitStrategy()
-        engine = SimulationEngine(feed, account, selected_strategy, ExecutionSimulator(friction))
+        engine = SimulationEngine(feed, benchmark_feed, account, selected_strategy, ExecutionSimulator(friction))
         engine.run()
         final_equity = account.final_equity(engine.last_prices)
         total_fees = sum((fill.fee for fill in engine.fills), ZERO)
@@ -441,11 +490,13 @@ def run_simulation(
             fill_count=len(engine.fills),
             final_equity=final_equity,
             friction=friction,
+            risk_free_rate=risk_free_rate,
             total_fees=total_fees,
             total_slippage=total_slippage,
             fills=list(engine.fills),
             orders=list(engine.orders),
             equity_curve=list(engine.equity_curve),
+            warnings=list(benchmark_feed.warnings),
         )
     except (SimulationInputError, SimulationExecutionError) as exc:
         return SimulationResult(
@@ -460,11 +511,13 @@ def run_simulation(
             fill_count=0,
             final_equity=None,
             friction=friction,
+            risk_free_rate=risk_free_rate,
             total_fees=ZERO,
             total_slippage=ZERO,
             fills=[],
             orders=[],
             equity_curve=[],
+            warnings=[],
             error=str(exc),
         )
 
@@ -484,6 +537,8 @@ def format_result(result: SimulationResult) -> str:
     ]
     if result.error is not None:
         lines.append(f"ERROR: {result.error}")
+    if result.warnings:
+        lines.extend(f"WARNING: {warning}" for warning in result.warnings)
     return "\n".join(lines)
 
 
@@ -511,7 +566,14 @@ def main(argv: list[str] | None = None) -> int:
         selected_initial_cash = config.initial_cash if config is not None else args.initial_cash
         selected_strategy = create_strategy(config.strategy_name, config.strategy_params) if config is not None else None
         selected_friction = config.friction if config is not None else FrictionModel()
-        result = run_simulation(args.dataset_dir, selected_initial_cash, selected_strategy, selected_friction)
+        selected_risk_free_rate = config.risk_free_rate if config is not None else ZERO
+        result = run_simulation(
+            args.dataset_dir,
+            selected_initial_cash,
+            selected_strategy,
+            selected_friction,
+            selected_risk_free_rate,
+        )
     except SimulationConfigError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 2
@@ -583,6 +645,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     strategy_name = payload.get("strategy_name")
     strategy_params = payload.get("strategy_params")
     friction_payload = payload.get("friction", {})
+    risk_free_rate = _decimal_config_value(payload, "risk_free_rate", ZERO, "Config risk_free_rate")
 
     if not isinstance(initial_cash_value, str):
         raise SimulationConfigError("Config initial_cash must be a decimal string.")
@@ -599,6 +662,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         strategy_name=strategy_name.strip(),
         strategy_params=strategy_params,
         friction=friction,
+        risk_free_rate=risk_free_rate,
     )
 
 
@@ -620,7 +684,7 @@ def create_strategy(strategy_name: str, strategy_params: dict[str, object]) -> S
     raise SimulationConfigError(f"Strategy {strategy_name!r} is registered but cannot be constructed.")
 
 
-def _read_market_prices(path: Path) -> list[MarketPriceEvent]:
+def _read_market_prices(path: Path, file_name: str) -> list[MarketPriceEvent]:
     rows: list[MarketPriceEvent] = []
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -628,18 +692,18 @@ def _read_market_prices(path: Path) -> list[MarketPriceEvent]:
             try:
                 raw_headers = next(reader)
             except StopIteration:
-                raise SimulationInputError("market_prices.csv is empty.")
+                raise SimulationInputError(f"{file_name} is empty.")
 
             headers = [header.strip() for header in raw_headers]
             for required in ["timestamp", "symbol", "price"]:
                 if required not in headers:
-                    raise SimulationInputError(f"market_prices.csv missing required header: {required}.")
+                    raise SimulationInputError(f"{file_name} missing required header: {required}.")
 
             for row_number, raw_row in enumerate(reader, start=2):
                 if not raw_row or all(audit._is_blank(cell) for cell in raw_row):
                     continue
                 if len(raw_row) > len(headers):
-                    raise SimulationInputError(f"market_prices.csv row {row_number} has more fields than headers.")
+                    raise SimulationInputError(f"{file_name} row {row_number} has more fields than headers.")
                 row = dict(zip(headers, raw_row + [""] * (len(headers) - len(raw_row))))
 
                 timestamp_text = row.get("timestamp", "")
@@ -647,26 +711,67 @@ def _read_market_prices(path: Path) -> list[MarketPriceEvent]:
                 price_text = row.get("price", "")
 
                 if audit._is_blank(timestamp_text):
-                    raise SimulationInputError(f"market_prices.csv row {row_number} missing timestamp.")
+                    raise SimulationInputError(f"{file_name} row {row_number} missing timestamp.")
                 if symbol == "":
-                    raise SimulationInputError(f"market_prices.csv row {row_number} missing symbol.")
+                    raise SimulationInputError(f"{file_name} row {row_number} missing symbol.")
                 if audit._is_blank(price_text):
-                    raise SimulationInputError(f"market_prices.csv row {row_number} missing price.")
+                    raise SimulationInputError(f"{file_name} row {row_number} missing price.")
 
                 timestamp = audit._parse_timestamp(timestamp_text, "datetime")
                 if not isinstance(timestamp, datetime):
-                    raise SimulationInputError(f"market_prices.csv row {row_number} has invalid ISO datetime.")
+                    raise SimulationInputError(f"{file_name} row {row_number} has invalid ISO datetime.")
 
                 price = audit._parse_decimal(price_text)
                 if price is None:
-                    raise SimulationInputError(f"market_prices.csv row {row_number} has invalid finite price.")
+                    raise SimulationInputError(f"{file_name} row {row_number} has invalid finite price.")
 
                 rows.append(MarketPriceEvent(timestamp=timestamp, symbol=symbol, price=price))
     except UnicodeDecodeError as exc:
-        raise SimulationInputError(f"market_prices.csv decode error: {exc}") from exc
+        raise SimulationInputError(f"{file_name} decode error: {exc}") from exc
     except csv.Error as exc:
-        raise SimulationInputError(f"market_prices.csv parse error: {exc}") from exc
+        raise SimulationInputError(f"{file_name} parse error: {exc}") from exc
     return rows
+
+
+def _validate_one_symbol_price_events(events: list[MarketPriceEvent], file_name: str) -> None:
+    symbols = sorted({event.symbol for event in events})
+    if len(symbols) != 1:
+        raise SimulationInputError(f"{file_name} must contain exactly one symbol.")
+
+    previous: datetime | None = None
+    for event in events:
+        if previous is not None:
+            if not audit._timestamps_are_comparable(previous, event.timestamp):
+                raise SimulationInputError(f"{file_name} cannot mix timezone-aware and timezone-naive timestamps.")
+            if event.timestamp <= previous:
+                raise SimulationInputError(f"{file_name} timestamps must be strictly increasing.")
+        previous = event.timestamp
+
+
+def _align_benchmark_to_market(
+    market_events: list[MarketPriceEvent],
+    benchmark_events: list[MarketPriceEvent],
+    initial_cash: Decimal,
+) -> dict[datetime, BenchmarkSnapshot]:
+    snapshots: dict[datetime, BenchmarkSnapshot] = {}
+    benchmark_index = 0
+    latest_price: Decimal | None = None
+    base_price: Decimal | None = None
+
+    for market_event in market_events:
+        while benchmark_index < len(benchmark_events) and benchmark_events[benchmark_index].timestamp <= market_event.timestamp:
+            latest_price = benchmark_events[benchmark_index].price
+            if base_price is None:
+                base_price = latest_price
+            benchmark_index += 1
+        if latest_price is None or base_price is None or base_price == 0:
+            snapshots[market_event.timestamp] = BenchmarkSnapshot(price=None, equity=None)
+        else:
+            snapshots[market_event.timestamp] = BenchmarkSnapshot(
+                price=latest_price,
+                equity=initial_cash * latest_price / base_price,
+            )
+    return snapshots
 
 
 def _write_run_artifacts(export_dir: Path, result: SimulationResult, dataset_dir: Path, run_id: str) -> None:
@@ -688,7 +793,8 @@ def _manifest_payload(result: SimulationResult, dataset_dir: Path, run_id: str) 
         "dataset_dir": str(dataset_dir),
         "strategy_name": result.strategy_name,
         "initial_cash": format_decimal(result.initial_cash),
-        "input_files": ["market_prices.csv"],
+        "risk_free_rate": format_decimal(result.risk_free_rate),
+        "input_files": _input_files_payload(result),
         "friction": {
             "fee_rate": format_decimal(_result_fee_rate(result)),
             "slippage_per_trade": format_decimal(_result_slippage_per_trade(result)),
@@ -702,6 +808,7 @@ def _manifest_payload(result: SimulationResult, dataset_dir: Path, run_id: str) 
             "one symbol only",
             "one deterministic strategy selected from a static registry or default legacy strategy",
         ],
+        "warnings": list(result.warnings),
         "generated_at_policy": "omitted_for_determinism",
     }
 
@@ -733,7 +840,17 @@ def _audit_summary_payload(audit_result: audit.AuditResult) -> dict[str, object]
 
 
 def _write_equity_curve(path: Path, result: SimulationResult) -> None:
-    headers = ["timestamp", "equity", "cash", "position_value", "symbol", "position_quantity", "last_price"]
+    headers = [
+        "timestamp",
+        "equity",
+        "cash",
+        "position_value",
+        "symbol",
+        "position_quantity",
+        "last_price",
+        "benchmark_price",
+        "benchmark_equity",
+    ]
     rows = [
         [
             snapshot.timestamp.date().isoformat(),
@@ -743,6 +860,8 @@ def _write_equity_curve(path: Path, result: SimulationResult) -> None:
             snapshot.symbol,
             format_decimal(snapshot.position_quantity),
             format_decimal(snapshot.last_price),
+            _format_optional_csv_decimal(snapshot.benchmark_price),
+            _format_optional_csv_decimal(snapshot.benchmark_equity),
         ]
         for snapshot in result.equity_curve
     ]
@@ -847,6 +966,13 @@ def _write_csv(path: Path, headers: list[str], rows: list[list[str]]) -> None:
         writer.writerows(rows)
 
 
+def _input_files_payload(result: SimulationResult) -> list[str]:
+    input_files = ["market_prices.csv"]
+    if any(snapshot.benchmark_price is not None for snapshot in result.equity_curve):
+        input_files.append("benchmark_prices.csv")
+    return input_files
+
+
 def _market_state(event: MarketPriceEvent) -> MarketState:
     return MarketState(timestamp=event.timestamp, symbol=event.symbol, price=event.price)
 
@@ -872,8 +998,8 @@ def _parse_friction_config(value: object) -> FrictionModel:
         return FrictionModel()
     if not isinstance(value, dict):
         raise SimulationConfigError("Config friction must be an object.")
-    fee_rate = _decimal_config_value(value, "fee_rate", ZERO)
-    slippage_per_trade = _decimal_config_value(value, "slippage_per_trade", ZERO)
+    fee_rate = _decimal_config_value(value, "fee_rate", ZERO, "Config friction.fee_rate")
+    slippage_per_trade = _decimal_config_value(value, "slippage_per_trade", ZERO, "Config friction.slippage_per_trade")
     if fee_rate < 0:
         raise SimulationConfigError("Config friction.fee_rate must be nonnegative.")
     if slippage_per_trade < 0:
@@ -881,17 +1007,17 @@ def _parse_friction_config(value: object) -> FrictionModel:
     return FrictionModel(fee_rate=fee_rate, slippage_per_trade=slippage_per_trade)
 
 
-def _decimal_config_value(params: dict[str, object], key: str, default: Decimal) -> Decimal:
+def _decimal_config_value(params: dict[str, object], key: str, default: Decimal, label: str) -> Decimal:
     value = params.get(key, str(default))
     if isinstance(value, bool):
-        raise SimulationConfigError(f"Config friction.{key} must be a decimal number or string.")
+        raise SimulationConfigError(f"{label} must be a decimal number or string.")
     if isinstance(value, (int, float)):
         value = str(value)
     if not isinstance(value, str):
-        raise SimulationConfigError(f"Config friction.{key} must be a decimal number or string.")
+        raise SimulationConfigError(f"{label} must be a decimal number or string.")
     parsed = audit._parse_decimal(value)
     if parsed is None:
-        raise SimulationConfigError(f"Config friction.{key} must be finite.")
+        raise SimulationConfigError(f"{label} must be finite.")
     return parsed
 
 
@@ -970,6 +1096,12 @@ def format_decimal(value: Decimal) -> str:
 def _format_optional_decimal(value: Decimal | None) -> str:
     if value is None:
         return "UNAVAILABLE"
+    return format_decimal(value)
+
+
+def _format_optional_csv_decimal(value: Decimal | None) -> str:
+    if value is None:
+        return ""
     return format_decimal(value)
 
 

@@ -30,9 +30,9 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual("PASS", result.audit_status)
         self.assertEqual(2, result.order_count)
         self.assertEqual(2, result.fill_count)
-        self.assertEqual(Decimal("100001"), result.final_cash)
+        self.assertEqual(Decimal("100002"), result.final_cash)
         self.assertEqual({}, result.final_positions)
-        self.assertEqual(Decimal("100001"), result.final_equity)
+        self.assertEqual(Decimal("100002"), result.final_equity)
 
     def test_audit_inconclusive_does_not_block_valid_market_feed(self) -> None:
         result = simulate.run_simulation(FIXTURES / "valid_minimal")
@@ -103,8 +103,15 @@ class SimulationTests(unittest.TestCase):
 
     def test_fill_log_records_fills(self) -> None:
         feed = simulate.DataFeed.from_dataset(FIXTURES / "valid_complete")
+        benchmark_feed = simulate.BenchmarkFeed.from_dataset(FIXTURES / "valid_complete", feed.events, Decimal("100000"))
         account = simulate.SimulatedAccount(Decimal("100000"))
-        engine = simulate.SimulationEngine(feed, account, simulate.BuyAndHoldOneUnitStrategy(), simulate.ExecutionSimulator())
+        engine = simulate.SimulationEngine(
+            feed,
+            benchmark_feed,
+            account,
+            simulate.BuyAndHoldOneUnitStrategy(),
+            simulate.ExecutionSimulator(),
+        )
         engine.run()
         self.assertEqual(2, len(engine.fills))
         self.assertEqual(["buy", "sell"], [fill.side for fill in engine.fills])
@@ -153,12 +160,42 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(simulate.FAIL, result.status)
         self.assertIn("exactly one symbol", result.error or "")
 
+    def test_missing_benchmark_prices_warns_without_blocking_simulation(self) -> None:
+        result = simulate.run_simulation(FIXTURES / "valid_minimal")
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertTrue(any("benchmark_prices.csv missing" in warning for warning in result.warnings))
+        self.assertTrue(all(snapshot.benchmark_equity is None for snapshot in result.equity_curve))
+
+    def test_benchmark_prices_forward_fill_to_market_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_file(
+                root,
+                "market_prices.csv",
+                "timestamp,symbol,price\n"
+                "2026-01-01T09:30:00,SIM,100\n"
+                "2026-01-02T09:30:00,SIM,101\n"
+                "2026-01-03T09:30:00,SIM,102\n",
+            )
+            write_file(
+                root,
+                "benchmark_prices.csv",
+                "timestamp,symbol,price\n"
+                "2026-01-01T09:30:00,BENCH,100\n"
+                "2026-01-03T09:30:00,BENCH,110\n",
+            )
+            result = simulate.run_simulation(root, Decimal("1000"))
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual([], result.warnings)
+        self.assertEqual([Decimal("100"), Decimal("100"), Decimal("110")], [row.benchmark_price for row in result.equity_curve])
+        self.assertEqual([Decimal("1000"), Decimal("1000"), Decimal("1100")], [row.benchmark_equity for row in result.equity_curve])
+
     def test_initial_cash_default_and_override_work(self) -> None:
         default_result = simulate.run_simulation(FIXTURES / "valid_complete")
         override_result = simulate.run_simulation(FIXTURES / "valid_complete", Decimal("1000"))
         self.assertEqual(Decimal("100000"), default_result.initial_cash)
         self.assertEqual(Decimal("1000"), override_result.initial_cash)
-        self.assertEqual(Decimal("1001"), override_result.final_cash)
+        self.assertEqual(Decimal("1002"), override_result.final_cash)
 
     def test_strategy_registry_exposes_configured_strategies(self) -> None:
         self.assertEqual({"BuyAndHold", "MovingAverageCross"}, set(simulate.STRATEGY_REGISTRY))
@@ -170,6 +207,7 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual({"quantity": "1"}, config.strategy_params)
         self.assertEqual(Decimal("0.0005"), config.friction.fee_rate)
         self.assertEqual(Decimal("0.01"), config.friction.slippage_per_trade)
+        self.assertEqual(Decimal("0.02"), config.risk_free_rate)
 
     def test_create_buy_and_hold_strategy_from_registry(self) -> None:
         strategy = simulate.create_strategy("BuyAndHold", {"quantity": "2"})
@@ -214,14 +252,20 @@ class SimulationTests(unittest.TestCase):
     def test_run_simulation_accepts_configured_strategy(self) -> None:
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
         strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
-        result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy, config.friction)
+        result = simulate.run_simulation(
+            FIXTURES / "valid_complete",
+            config.initial_cash,
+            strategy,
+            config.friction,
+            config.risk_free_rate,
+        )
         self.assertEqual(simulate.PASS, result.status)
         self.assertEqual("BuyAndHold", result.strategy_name)
         self.assertEqual(1, result.order_count)
         self.assertEqual(1, result.fill_count)
         self.assertEqual(Decimal("899.94"), result.final_cash)
         self.assertEqual({"SIM": Decimal("1")}, result.final_positions)
-        self.assertEqual(Decimal("1000.94"), result.final_equity)
+        self.assertEqual(Decimal("1001.9400"), result.final_equity)
         self.assertEqual(Decimal("0.05"), result.total_fees)
         self.assertEqual(Decimal("0.01"), result.total_slippage)
         self.assertEqual(Decimal("0.05"), result.fills[0].fee)
@@ -229,7 +273,7 @@ class SimulationTests(unittest.TestCase):
 
     def test_default_zero_friction_preserves_legacy_behavior(self) -> None:
         result = simulate.run_simulation(FIXTURES / "valid_complete")
-        self.assertEqual(Decimal("100001"), result.final_cash)
+        self.assertEqual(Decimal("100002"), result.final_cash)
         self.assertEqual(Decimal("0"), result.total_fees)
         self.assertEqual(Decimal("0"), result.total_slippage)
 
@@ -257,11 +301,11 @@ class SimulationCliTests(unittest.TestCase):
         self.assertIn("MVP0 AUDIT STATUS: PASS", lines)
         self.assertIn("STRATEGY: buy_and_hold_one_unit", lines)
         self.assertIn("INITIAL CASH: 100000", lines)
-        self.assertIn("FINAL CASH: 100001", lines)
+        self.assertIn("FINAL CASH: 100002", lines)
         self.assertIn("FINAL POSITIONS: none", lines)
         self.assertIn("ORDER COUNT: 2", lines)
         self.assertIn("FILL COUNT: 2", lines)
-        self.assertIn("FINAL EQUITY: 100001", lines)
+        self.assertIn("FINAL EQUITY: 100002", lines)
 
     def test_cli_initial_cash_override(self) -> None:
         completed = subprocess.run(
@@ -281,7 +325,7 @@ class SimulationCliTests(unittest.TestCase):
         )
         self.assertEqual(0, completed.returncode)
         self.assertIn("INITIAL CASH: 1000", completed.stdout)
-        self.assertIn("FINAL CASH: 1001", completed.stdout)
+        self.assertIn("FINAL CASH: 1002", completed.stdout)
 
     def test_cli_config_driven_run(self) -> None:
         completed = subprocess.run(
@@ -368,7 +412,9 @@ class SimulationExportTests(unittest.TestCase):
             self.assertEqual("mvp2-test", manifest["run_id"])
             self.assertEqual("buy_and_hold_one_unit", manifest["strategy_name"])
             self.assertEqual("1000", manifest["initial_cash"])
+            self.assertEqual("0", manifest["risk_free_rate"])
             self.assertIn("immediate fills", manifest["simulation_assumptions"])
+            self.assertEqual(["market_prices.csv", "benchmark_prices.csv"], manifest["input_files"])
             self.assertEqual("omitted_for_determinism", manifest["generated_at_policy"])
 
     def test_account_summary_matches_final_account_state(self) -> None:
@@ -377,23 +423,35 @@ class SimulationExportTests(unittest.TestCase):
             result = simulate.run_simulation(FIXTURES / "valid_complete")
             simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="mvp2-test")
             account_summary = json.loads((export_dir / "account_summary.json").read_text(encoding="utf-8"))
+            equity_curve = (export_dir / "equity_curve.csv").read_text(encoding="utf-8").splitlines()
             self.assertEqual("PASS", account_summary["status"])
             self.assertEqual("100000", account_summary["initial_cash"])
-            self.assertEqual("100001", account_summary["final_cash"])
-            self.assertEqual("100001", account_summary["final_equity"])
+            self.assertEqual("100002", account_summary["final_cash"])
+            self.assertEqual("100002", account_summary["final_equity"])
             self.assertEqual({}, account_summary["final_positions"])
             self.assertEqual(2, account_summary["order_count"])
             self.assertEqual(2, account_summary["fill_count"])
             self.assertEqual(2, account_summary["trade_count"])
             self.assertEqual("0", account_summary["total_fees"])
             self.assertEqual("0", account_summary["total_slippage"])
+            self.assertEqual(
+                "timestamp,equity,cash,position_value,symbol,position_quantity,last_price,benchmark_price,benchmark_equity",
+                equity_curve[0],
+            )
+            self.assertIn("2026-01-01,100000,99900,100,SIM,1,100,100,100000", equity_curve)
 
     def test_export_records_configured_friction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             export_dir = Path(tmp) / "run"
             config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
             strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
-            result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy, config.friction)
+            result = simulate.run_simulation(
+                FIXTURES / "valid_complete",
+                config.initial_cash,
+                strategy,
+                config.friction,
+                config.risk_free_rate,
+            )
             simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="mvp5-test")
             account_summary = json.loads((export_dir / "account_summary.json").read_text(encoding="utf-8"))
             manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
@@ -401,10 +459,11 @@ class SimulationExportTests(unittest.TestCase):
             trades = (export_dir / "trades.csv").read_text(encoding="utf-8").splitlines()
 
             self.assertEqual("899.9400", account_summary["final_cash"])
-            self.assertEqual("1000.9400", account_summary["final_equity"])
+            self.assertEqual("1001.9400", account_summary["final_equity"])
             self.assertEqual("0.0500", account_summary["total_fees"])
             self.assertEqual("0.01", account_summary["total_slippage"])
             self.assertEqual({"fee_rate": "0.0005", "slippage_per_trade": "0.01", "total_fees": "0.0500", "total_slippage": "0.01"}, manifest["friction"])
+            self.assertEqual("0.02", manifest["risk_free_rate"])
             self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,1,100,0.0500,0.01", fills)
             self.assertIn("2026-01-01T09:30:00,T000001,market_follow,buy,1,100,0.0600,,SIM,BuyAndHold,market_follow,O000001,F000001", trades)
 
@@ -417,10 +476,10 @@ class SimulationExportTests(unittest.TestCase):
             fills = (export_dir / "fills.csv").read_text(encoding="utf-8").splitlines()
             self.assertEqual("order_id,timestamp,symbol,side,quantity,requested_price,status", orders[0])
             self.assertIn("O000001,2026-01-01T09:30:00,SIM,buy,1,100,filled", orders)
-            self.assertIn("O000002,2026-01-02T09:30:00,SIM,sell,1,101,filled", orders)
+            self.assertIn("O000002,2026-01-03T09:30:00,SIM,sell,1,102,filled", orders)
             self.assertEqual("fill_id,order_id,timestamp,symbol,side,quantity,fill_price,fee,slippage", fills[0])
             self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,1,100,0,0", fills)
-            self.assertIn("F000002,O000002,2026-01-02T09:30:00,SIM,sell,1,101,0,0", fills)
+            self.assertIn("F000002,O000002,2026-01-03T09:30:00,SIM,sell,1,102,0,0", fills)
 
     def test_repeated_export_with_same_run_id_is_byte_identical(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -29,7 +29,13 @@ def export_friction_run(root: Path, run_id: str = "mvp5-test") -> Path:
     export_dir = root / "run"
     config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
     strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
-    result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy, config.friction)
+    result = simulate.run_simulation(
+        FIXTURES / "valid_complete",
+        config.initial_cash,
+        strategy,
+        config.friction,
+        config.risk_free_rate,
+    )
     simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id=run_id)
     return export_dir
 
@@ -64,9 +70,9 @@ class ValidateRunTests(unittest.TestCase):
         self.assertEqual("buy_and_hold_one_unit", result.strategy_name)
         self.assertEqual(2, result.order_count)
         self.assertEqual(2, result.fill_count)
-        self.assertEqual(Decimal("100001"), result.replayed_final_cash)
+        self.assertEqual(Decimal("100002"), result.replayed_final_cash)
         self.assertEqual({}, result.replayed_final_positions)
-        self.assertEqual(Decimal("100001"), result.replayed_final_equity)
+        self.assertEqual(Decimal("100002"), result.replayed_final_equity)
         self.assertEqual("INCONCLUSIVE", result.artifact_audit_status)
 
     def test_validate_run_passes_on_friction_export(self) -> None:
@@ -80,7 +86,7 @@ class ValidateRunTests(unittest.TestCase):
         self.assertEqual(1, result.fill_count)
         self.assertEqual(Decimal("899.94"), result.replayed_final_cash)
         self.assertEqual({"SIM": Decimal("1")}, result.replayed_final_positions)
-        self.assertEqual(Decimal("1000.94"), result.replayed_final_equity)
+        self.assertEqual(Decimal("1001.9400"), result.replayed_final_equity)
 
     def test_missing_required_artifact_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -202,7 +208,7 @@ class ValidateRunTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode)
         self.assertIn("VALIDATION STATUS: PASS", completed.stdout)
         self.assertIn("RUN ID: cli-test", completed.stdout)
-        self.assertIn("REPLAYED FINAL CASH: 100001", completed.stdout)
+        self.assertIn("REPLAYED FINAL CASH: 100002", completed.stdout)
         self.assertIn("ARTIFACT AUDIT STATUS: INCONCLUSIVE", completed.stdout)
 
     def test_cli_fails_on_modified_artifact_copy(self) -> None:
