@@ -1,0 +1,14 @@
+{
+  "friction": {
+    "fee_rate": "0.0005",
+    "slippage_per_trade": "0.01"
+  },
+  "initial_cash": "100000",
+  "risk_free_rate": "0.02",
+  "strategy_name": "PeriodicFactorWeight",
+  "strategy_params": {
+    "factor_name": "momentum",
+    "rebalance_interval": 5,
+    "top_k": 10
+  }
+}

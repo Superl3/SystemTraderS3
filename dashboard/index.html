@@ -920,6 +920,10 @@
                     </select>
                 </div>
                 <div class="form-group">
+                    <label class="form-label" for="strategyConfigJson">Strategy Config JSON</label>
+                    <textarea class="form-control" id="strategyConfigJson" rows="10" spellcheck="false" placeholder='{"initial_cash":"100000","strategy_name":"EqualWeightRebalance","strategy_params":{}}'></textarea>
+                </div>
+                <div class="form-group">
                     <label class="form-label" for="initialCash">초기 투자 자금 (Initial Cash)</label>
                     <input type="number" class="form-control" id="initialCash" value="100000" min="1" required>
                 </div>
@@ -944,6 +948,7 @@
         let equityChartInstance = null;
         let drawdownChartInstance = null;
         let currentTrades = [];
+        let strategyConfigPayloads = {};
 
         // App Initialisation
         window.addEventListener('DOMContentLoaded', () => {
@@ -1341,8 +1346,8 @@
                 dsSelect.innerHTML = '';
                 dsData.datasets.forEach(d => {
                     const opt = document.createElement('option');
-                    opt.value = d.name;
-                    opt.textContent = `${d.name} (${d.path})`;
+                    opt.value = d.path;
+                    opt.textContent = `${d.name} (${d.source}: ${d.path})`;
                     dsSelect.appendChild(opt);
                 });
 
@@ -1352,12 +1357,25 @@
                 const confSelect = document.getElementById('configSelect');
                 // Keep the default option
                 confSelect.innerHTML = `<option value="">-- 프리셋 없음 (기본 1유닛 매수/보유) --</option>`;
+                strategyConfigPayloads = {};
                 confData.configs.forEach(c => {
                     const opt = document.createElement('option');
-                    opt.value = c.name;
-                    opt.textContent = c.name;
+                    opt.value = c.path;
+                    opt.textContent = `${c.name} (${c.source})`;
                     confSelect.appendChild(opt);
+                    strategyConfigPayloads[c.path] = c.payload;
                 });
+                confSelect.onchange = () => {
+                    const editor = document.getElementById('strategyConfigJson');
+                    if (!confSelect.value) {
+                        editor.value = '';
+                        return;
+                    }
+                    editor.value = JSON.stringify(strategyConfigPayloads[confSelect.value] || {}, null, 2);
+                };
+                if (confSelect.value) {
+                    confSelect.onchange();
+                }
             } catch (err) {
                 console.error("Error loading simulation options:", err);
             }
@@ -1366,10 +1384,20 @@
         // Form Submission handler to trigger simulation run via API
         async function runSimulation(event) {
             event.preventDefault();
-            const dataset_name = document.getElementById('datasetSelect').value;
-            const config_name = document.getElementById('configSelect').value || null;
+            const dataset_path = document.getElementById('datasetSelect').value;
+            const config_path = document.getElementById('configSelect').value || null;
             const initial_cash = document.getElementById('initialCash').value;
             const run_id = document.getElementById('runId').value;
+            const configText = document.getElementById('strategyConfigJson').value.trim();
+            let config_json = null;
+            if (configText) {
+                try {
+                    config_json = JSON.parse(configText);
+                } catch (err) {
+                    alert(`Strategy Config JSON is invalid:\n${err.message}`);
+                    return;
+                }
+            }
 
             closeSimModal();
             showLoading(true, "시뮬레이션 구동 및 결과 생성 중...");
@@ -1379,8 +1407,9 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        dataset_name,
-                        config_name,
+                        dataset_path,
+                        config_path,
+                        config_json,
                         initial_cash,
                         run_id
                     })

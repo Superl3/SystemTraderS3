@@ -17,6 +17,7 @@ try:
     from system_trading_s3.simulate import (
         run_simulation,
         load_simulation_config,
+        simulation_config_from_dict,
         create_strategy,
         FrictionModel,
         export_run_artifacts,
@@ -31,6 +32,8 @@ except ImportError as e:
 PORT = 8000
 RUNS_DIR = ROOT_DIR / "runs"
 FIXTURES_DIR = ROOT_DIR / "tests" / "fixtures"
+DATASETS_DIR = ROOT_DIR / "datasets"
+STRATEGY_CONFIGS_DIR = ROOT_DIR / "configs" / "strategies"
 
 # Helper to serialize Decimals to float/str in JSON
 class DecimalEncoder(json.JSONEncoder):
@@ -65,6 +68,47 @@ def json_to_dict(path: Path) -> dict:
     except Exception as e:
         print(f"Error reading JSON {path.name}: {e}")
         return {}
+
+
+def resolve_drop_in_path(value: object, roots: list[Path], expect_dir: bool) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    requested = Path(value.strip())
+    candidates: list[Path] = []
+    if not requested.is_absolute():
+        candidates.append(ROOT_DIR / requested)
+        for root in roots:
+            candidates.append(root / requested)
+    candidates.append(requested)
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if not any(_is_relative_to(resolved, root.resolve()) for root in roots):
+            continue
+        if expect_dir and resolved.is_dir():
+            return resolved
+        if not expect_dir and resolved.is_file():
+            return resolved
+    return None
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def portable_artifact_path(path: Path) -> Path:
+    try:
+        return path.resolve().relative_to(ROOT_DIR.resolve())
+    except ValueError:
+        return path
+
 
 class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -204,25 +248,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def handle_list_datasets(self):
         datasets = []
-        # Check standard fixtures
-        if FIXTURES_DIR.exists() and FIXTURES_DIR.is_dir():
-            for entry in FIXTURES_DIR.iterdir():
-                if entry.is_dir() and ((entry / "market_prices.csv").exists() or any(entry.glob("*_prices.csv"))):
-                    datasets.append({
-                        "name": entry.name,
-                        "path": str(entry.relative_to(ROOT_DIR))
-                    })
-        # Check root level data if any (or just search for any dataset with price files)
+        for root, source in [(DATASETS_DIR, "datasets"), (FIXTURES_DIR, "fixtures")]:
+            if root.exists() and root.is_dir():
+                for entry in sorted(root.iterdir()):
+                    if entry.is_dir() and ((entry / "market_prices.csv").exists() or any(entry.glob("*_prices.csv"))):
+                        datasets.append({
+                            "name": entry.name,
+                            "path": str(entry.relative_to(ROOT_DIR)),
+                            "source": source,
+                        })
         self.send_json_response(200, {"datasets": datasets})
 
     def handle_list_configs(self):
         configs = []
-        if FIXTURES_DIR.exists() and FIXTURES_DIR.is_dir():
-            for entry in FIXTURES_DIR.glob("*.json"):
-                configs.append({
-                    "name": entry.name,
-                    "path": str(entry.relative_to(ROOT_DIR))
-                })
+        for root, source in [(STRATEGY_CONFIGS_DIR, "strategy_configs"), (FIXTURES_DIR, "fixtures")]:
+            if root.exists() and root.is_dir():
+                for entry in sorted(root.glob("*.json")):
+                    configs.append({
+                        "name": entry.name,
+                        "path": str(entry.relative_to(ROOT_DIR)),
+                        "source": source,
+                        "payload": json_to_dict(entry),
+                    })
         self.send_json_response(200, {"configs": configs})
 
     def handle_run_simulation(self):
@@ -236,24 +283,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         dataset_name = params.get("dataset_name")
+        dataset_path_text = params.get("dataset_path")
         config_name = params.get("config_name")
+        config_path_text = params.get("config_path")
+        config_json = params.get("config_json")
         initial_cash_str = params.get("initial_cash", "100000")
         run_id = params.get("run_id", "web-run")
 
-        if not dataset_name:
-            self.send_error_json(400, "dataset_name is required")
+        if not dataset_name and not dataset_path_text:
+            self.send_error_json(400, "dataset_name or dataset_path is required")
             return
 
-        dataset_path = FIXTURES_DIR / dataset_name
-        if not dataset_path.exists() or not dataset_path.is_dir():
-            self.send_error_json(400, f"Dataset {dataset_name} does not exist")
+        dataset_path = resolve_drop_in_path(dataset_path_text or dataset_name, [DATASETS_DIR, FIXTURES_DIR], expect_dir=True)
+        if dataset_path is None:
+            self.send_error_json(400, f"Dataset {dataset_path_text or dataset_name} does not exist")
             return
 
         config_path = None
-        if config_name:
-            config_path = FIXTURES_DIR / config_name
-            if not config_path.exists() or not config_path.is_file():
-                self.send_error_json(400, f"Config {config_name} does not exist")
+        if config_path_text or config_name:
+            config_path = resolve_drop_in_path(config_path_text or config_name, [STRATEGY_CONFIGS_DIR, FIXTURES_DIR], expect_dir=False)
+            if config_path is None:
+                self.send_error_json(400, f"Config {config_path_text or config_name} does not exist")
                 return
 
         # Sanitize run_id
@@ -263,7 +313,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         try:
             # 1. Parse config or use defaults
-            if config_path:
+            if config_json:
+                if isinstance(config_json, str):
+                    config_payload = json.loads(config_json)
+                else:
+                    config_payload = config_json
+                if not isinstance(config_payload, dict):
+                    raise ValueError("config_json must be a JSON object")
+                sim_config = simulation_config_from_dict(config_payload)
+                initial_cash = sim_config.initial_cash
+                strategy = create_strategy(sim_config.strategy_name, sim_config.strategy_params)
+                friction = sim_config.friction
+                risk_free_rate = sim_config.risk_free_rate
+            elif config_path:
                 sim_config = load_simulation_config(config_path)
                 initial_cash = sim_config.initial_cash
                 strategy = create_strategy(sim_config.strategy_name, sim_config.strategy_params)
@@ -296,7 +358,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             export_dir = RUNS_DIR / run_id
             export_run_artifacts(
                 result=result,
-                dataset_dir=dataset_path,
+                dataset_dir=portable_artifact_path(dataset_path),
                 export_dir=export_dir,
                 run_id=run_id,
                 overwrite=True

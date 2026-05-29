@@ -26,6 +26,9 @@ rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
 # MVP7-MVP9: run a multi-symbol periodic factor rebalance fixture
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json
 
+# Integrated simulator: run a drop-in simulated US tech 100 historical dataset
+rtk python -m system_trading_s3.simulate datasets/us_tech_100_simulated --config configs/strategies/periodic_momentum_top10.json
+
 # MVP2: export deterministic run artifacts
 $run = "$env:TEMP\systemtraders3-docs-smoke"
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json --export-dir $run --run-id docs-smoke --overwrite
@@ -104,6 +107,13 @@ MVP9 factor rebalancing:
 - adds `PeriodicFactorWeight`, which rebalances every configured number of ticks into the top-K symbols by factor value;
 - keeps the `PortfolioRebalancer` factor-agnostic.
 
+Drop-in simulator objects:
+
+- datasets can be dropped under `datasets/<dataset_id>/` when they contain `market_prices.csv` or `*_prices.csv`;
+- strategy configs can be dropped under `configs/strategies/*.json`;
+- the simulator CLI accepts arbitrary dataset and config paths;
+- the dashboard lists both fixture and drop-in datasets/configs, and allows direct JSON strategy editing before a run.
+
 MVP2 export:
 
 - writes deterministic artifacts: `run_manifest.json`, `equity_curve.csv`, `trades.csv`, `orders.csv`, `fills.csv`, `account_summary.json`, and `audit_summary.json`;
@@ -149,7 +159,7 @@ Optional:
 - `benchmark.csv`
 - `factor_exposure.csv`
 
-MVP1+ simulation accepts either normalized `market_prices.csv` or multiple sorted `*_prices.csv` files, each using `timestamp,symbol,price`. MVP6+ also accepts optional `benchmark_prices.csv`; the simulator forward-fills benchmark prices onto market timestamps and normalizes benchmark equity from the same initial cash. MVP9 also accepts optional `factors.csv` using `timestamp,symbol,factor_name,factor_value`; missing factors do not block non-factor strategies.
+MVP1+ simulation accepts either normalized `market_prices.csv` or multiple sorted `*_prices.csv` files, each using `timestamp,symbol,price`. MVP6+ also accepts optional `benchmark_prices.csv`; the simulator forward-fills benchmark prices onto market timestamps and normalizes benchmark equity from the same initial cash. MVP9 also accepts optional `factors.csv` using `timestamp,symbol,factor_name,factor_value`; missing factors do not block non-factor strategies. The committed `datasets/us_tech_100_simulated` dataset is synthetic historical-style data for integration testing and demos, not real market data.
 
 CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are accepted. Header whitespace is trimmed, header names remain case-sensitive, unknown extra columns are allowed, and blank required cells are treated as missing rather than zero.
 

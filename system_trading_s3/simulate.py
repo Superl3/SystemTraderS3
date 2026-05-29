@@ -884,6 +884,10 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     if not isinstance(payload, dict):
         raise SimulationConfigError("Config must be a JSON object.")
 
+    return simulation_config_from_dict(payload)
+
+
+def simulation_config_from_dict(payload: dict[str, object]) -> SimulationConfig:
     initial_cash_value = payload.get("initial_cash")
     strategy_name = payload.get("strategy_name")
     strategy_params = payload.get("strategy_params")

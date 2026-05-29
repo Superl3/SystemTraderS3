@@ -1,0 +1,10 @@
+{
+  "friction": {
+    "fee_rate": "0",
+    "slippage_per_trade": "0"
+  },
+  "initial_cash": "100000",
+  "risk_free_rate": "0",
+  "strategy_name": "EqualWeightRebalance",
+  "strategy_params": {}
+}

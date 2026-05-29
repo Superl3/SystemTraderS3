@@ -33,6 +33,20 @@ class DashboardApiTests(unittest.TestCase):
         self.assertEqual("INCONCLUSIVE", runs_by_id["demo-run"]["audit_status"])
         self.assertEqual("tests\\fixtures\\valid_multisymbol", runs_by_id["demo-run"]["dataset"])
 
+    def test_dashboard_lists_drop_in_datasets_and_strategy_configs(self) -> None:
+        with self._running_server() as base_url:
+            datasets_payload = self._get_json(f"{base_url}/api/datasets")
+            configs_payload = self._get_json(f"{base_url}/api/configs")
+
+        dataset_paths = {item["path"] for item in datasets_payload["datasets"]}
+        config_paths = {item["path"] for item in configs_payload["configs"]}
+        self.assertIn("datasets\\us_tech_100_simulated", dataset_paths)
+        self.assertIn("configs\\strategies\\periodic_momentum_top10.json", config_paths)
+        periodic_config = next(
+            item for item in configs_payload["configs"] if item["path"] == "configs\\strategies\\periodic_momentum_top10.json"
+        )
+        self.assertEqual("PeriodicFactorWeight", periodic_config["payload"]["strategy_name"])
+
     def test_dashboard_simulate_endpoint_exports_and_metrics_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dashboard_server.RUNS_DIR = Path(tmp) / "runs"
@@ -49,6 +63,30 @@ class DashboardApiTests(unittest.TestCase):
             self.assertEqual(True, payload["success"])
             self.assertTrue((run_dir / "run_manifest.json").is_file())
             self.assertTrue((run_dir / "metrics.json").is_file())
+
+    def test_dashboard_simulate_endpoint_accepts_inline_strategy_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dashboard_server.RUNS_DIR = Path(tmp) / "runs"
+            with self._running_server() as base_url:
+                payload = self._post_json(
+                    f"{base_url}/api/simulate",
+                    {
+                        "dataset_path": "datasets/us_tech_100_simulated",
+                        "config_json": {
+                            "initial_cash": "100000",
+                            "strategy_name": "PeriodicFactorWeight",
+                            "strategy_params": {"factor_name": "momentum", "rebalance_interval": 5, "top_k": 10},
+                            "friction": {"fee_rate": "0.0005", "slippage_per_trade": "0.01"},
+                            "risk_free_rate": "0.02",
+                        },
+                        "run_id": "inline-config-test",
+                    },
+                )
+            run_dir = dashboard_server.RUNS_DIR / "inline-config-test"
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(True, payload["success"])
+            self.assertEqual("PeriodicFactorWeight", manifest["strategy_name"])
+            self.assertEqual("datasets\\us_tech_100_simulated", manifest["dataset_dir"])
 
     def _running_server(self):
         testcase = self

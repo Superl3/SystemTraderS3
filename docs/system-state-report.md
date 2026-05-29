@@ -2,7 +2,7 @@
 
 작성일: 2026-05-29
 
-범위: MVP0-MVP9 핵심 구현, 로컬 대시보드, 데모 run artifact, Yahoo Finance 다운로드 스크립트까지 포함한 현재 저장소 상태.
+범위: MVP0-MVP9 핵심 구현, 로컬 대시보드, 데모 run artifact, Yahoo Finance 다운로드 스크립트, drop-in US tech 100 synthetic dataset/config까지 포함한 현재 저장소 상태.
 
 ## 요약
 
@@ -33,8 +33,8 @@ fixture/config
 현재 브랜치:
 
 - `master`
-- `origin/master`와 동기화된 상태에서 안정화 작업 진행 중
-- 기준 HEAD: `41dec64`
+- `origin/master` 기준 `8eeaac9`에서 drop-in simulator 확장 작업 진행 중
+- 기준 HEAD: `8eeaac9`
 
 주요 커밋 흐름:
 
@@ -47,6 +47,7 @@ fixture/config
 - `77eb2d4` - MVP8 target-weight rebalancing
 - `25e198d` - MVP9 factor ingestion and periodic rebalancing
 - `41dec64` - dashboard and demo run artifacts
+- `8eeaac9` - stability pass for dashboard/downloader/manifest/tests
 
 ## 구현된 계층
 
@@ -157,6 +158,10 @@ rtk python -m system_trading_s3.validate_run <run_artifact_dir>
 현재 샘플 설정:
 
 - `tests/fixtures/sample_config.json`
+- `configs/strategies/periodic_momentum_top10.json`
+- `configs/strategies/equal_weight_rebalance.json`
+- `configs/strategies/buy_and_hold_tech001.json`
+- `configs/strategies/moving_average_tech001.json`
 
 현재 구조:
 
@@ -171,6 +176,33 @@ rtk python -m system_trading_s3.validate_run <run_artifact_dir>
 - Strategy는 target exposure만 결정한다.
 - Rebalancer는 integer-share order를 계산한다.
 - Execution/accounting은 fill과 계좌 상태 변경을 독점한다.
+
+### Integrated Drop-In Simulator
+
+새로 추가된 기준선:
+
+- `datasets/us_tech_100_simulated`
+- `configs/strategies/*.json`
+- `docs/integrated-simulator.md`
+- `scripts/generate_simulated_universe.py`
+
+`datasets/us_tech_100_simulated`는 100개 synthetic US tech-style symbol을 가진 과거형 dataset이다. 실제 시장 데이터가 아니라 deterministic fixture다.
+
+검증된 실행:
+
+```powershell
+rtk python -m system_trading_s3.simulate datasets/us_tech_100_simulated --config configs/strategies/periodic_momentum_top10.json
+```
+
+현재 결과:
+
+- simulation status: `PASS`
+- strategy: `PeriodicFactorWeight`
+- final equity: `101983.711395`
+- order count: `16`
+- fill count: `16`
+
+이 계층의 목적은 "전략 코드를 고치지 않고 dataset/config를 drop-in하여 실행"하는 것이다.
 
 ### MVP5-MVP6: Metrics
 
@@ -228,6 +260,8 @@ rtk python -m system_trading_s3.metrics <run_artifact_dir>
 - Python server는 stdlib 기반이지만, 브라우저 UI는 Chart.js, Lucide, Google Fonts CDN을 쓴다고 명시했다.
 - dashboard API smoke test를 추가했다.
 - `/api/runs`가 `dataset_dir`과 `audit_summary.json`의 실제 필드를 읽도록 정리했다.
+- `datasets/`와 `configs/strategies/`의 drop-in object를 dashboard에서 선택할 수 있게 했다.
+- 선택한 전략 config를 dashboard에서 JSON으로 직접 수정해 실행할 수 있게 했다.
 
 남은 gap:
 
@@ -293,8 +327,9 @@ rtk python scripts/download_data.py --help
 
 결과:
 
-- unit tests: `95 tests OK`
+- unit tests: `98 tests OK`
 - MVP9 sample simulation: `PASS`
+- US tech 100 simulated dataset run: `PASS`
 - demo run validation: `PASS`
 - demo run audit: `INCONCLUSIVE`, optional gap만 있음
 - demo run metrics: `PASS`

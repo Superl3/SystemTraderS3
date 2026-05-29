@@ -73,6 +73,8 @@ rtk python -m system_trading_s3.metrics <run_dir>
 
 `market_prices.csv` or sorted `*_prices.csv` files are the true simulation inputs for MVP1+. Optional `benchmark_prices.csv` is read by the simulation engine, forward-filled onto market timestamps, and exported as normalized benchmark equity. Optional `factors.csv` is read by the simulation engine, forward-filled onto market timestamps, and exposed to strategies as cross-sectional factor data. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
 
+Drop-in datasets can live under `datasets/<dataset_id>/`, and drop-in strategy configs can live under `configs/strategies/*.json`. The CLI accepts arbitrary dataset/config paths, and the dashboard lists both fixture and drop-in objects. `datasets/us_tech_100_simulated` is a committed 100-symbol synthetic historical-style US tech dataset for integration testing and demos.
+
 ## CSV Policy
 
 - Files are parsed with `utf-8-sig`.
@@ -136,6 +138,7 @@ Later phase: small-capital live validation criteria only.
 - Strategy behavior is portfolio-capable but still simple: current built-ins either act across available symbols, use an optional `target_symbol`, emit one-shot equal weights, or periodically rebalance to top-K symbols by one factor.
 - Rebalancing uses integer shares, deterministic symbol ordering, and no optimizer.
 - Factor data is optional, forward-filled, and used only by strategies that explicitly request it.
+- The committed US tech 100 dataset is synthetic deterministic fixture data, not real market data.
 - Immediate fills only.
 - Friction is deterministic only: percentage fee plus fixed slippage per fill.
 - Benchmark synchronization is deterministic forward-fill only.

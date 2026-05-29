@@ -379,6 +379,23 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(Decimal("0.4500"), result.fills[0].fee)
         self.assertEqual(Decimal("0.01"), result.fills[0].slippage)
 
+    def test_us_tech_100_simulated_dataset_runs_with_drop_in_config(self) -> None:
+        dataset_dir = ROOT / "datasets" / "us_tech_100_simulated"
+        config = simulate.load_simulation_config(ROOT / "configs" / "strategies" / "periodic_momentum_top10.json")
+        strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+        result = simulate.run_simulation(
+            dataset_dir,
+            config.initial_cash,
+            strategy,
+            config.friction,
+            config.risk_free_rate,
+        )
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual("PeriodicFactorWeight", result.strategy_name)
+        self.assertEqual(100, len(result.equity_curve[0].prices))
+        self.assertGreater(result.order_count, 0)
+        self.assertGreater(result.final_equity or Decimal("0"), Decimal("0"))
+
     def test_default_zero_friction_preserves_legacy_behavior(self) -> None:
         result = simulate.run_simulation(FIXTURES / "valid_complete")
         self.assertEqual(Decimal("100002"), result.final_cash)
