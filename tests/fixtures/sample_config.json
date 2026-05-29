@@ -1,8 +1,12 @@
 {
   "initial_cash": "1000",
-  "strategy_name": "EqualWeightRebalance",
+  "strategy_name": "PeriodicFactorWeight",
   "risk_free_rate": 0.02,
-  "strategy_params": {},
+  "strategy_params": {
+    "factor_name": "momentum",
+    "rebalance_interval": 2,
+    "top_k": 1
+  },
   "friction": {
     "fee_rate": 0.0005,
     "slippage_per_trade": "0.01"

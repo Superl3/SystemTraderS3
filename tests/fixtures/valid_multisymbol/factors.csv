@@ -1,0 +1,5 @@
+timestamp,symbol,factor_name,factor_value
+2026-01-01T09:30:00,AAA,momentum,1.2
+2026-01-01T09:30:00,BBB,momentum,0.8
+2026-01-03T09:30:00,AAA,momentum,0.7
+2026-01-03T09:30:00,BBB,momentum,1.5

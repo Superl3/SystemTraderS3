@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 from system_trading_s3 import metrics
@@ -29,14 +30,13 @@ def export_default_run(root: Path) -> Path:
 
 def export_friction_config_run(root: Path) -> Path:
     export_dir = root / "run"
-    config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
-    strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+    strategy = simulate.create_strategy("EqualWeightRebalance", {})
     result = simulate.run_simulation(
         FIXTURES / "valid_complete",
-        config.initial_cash,
+        Decimal("1000"),
         strategy,
-        config.friction,
-        config.risk_free_rate,
+        simulate.FrictionModel(fee_rate=Decimal("0.0005"), slippage_per_trade=Decimal("0.01")),
+        Decimal("0.02"),
     )
     simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="metrics-friction-test")
     return export_dir
@@ -192,7 +192,7 @@ class MetricsTests(unittest.TestCase):
             payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
 
         self.assertEqual(metrics.PASS, result.status)
-        self.assertEqual("5.502724", payload["total_return_pct"])
+        self.assertEqual("1.703384", payload["total_return_pct"])
         self.assertEqual("0.000000", payload["max_drawdown_pct"])
         self.assertEqual(True, payload["benchmark_relative"]["benchmark_available"])
         self.assertNotEqual("UNAVAILABLE", payload["benchmark_relative"]["alpha_pct"])

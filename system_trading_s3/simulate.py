@@ -59,6 +59,15 @@ class MarketPriceEvent:
     symbol: str
     price: Decimal
     prices: dict[str, Decimal] = field(default_factory=dict)
+    factor_data: dict[str, dict[str, float]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FactorEvent:
+    timestamp: datetime
+    symbol: str
+    factor_name: str
+    factor_value: float
 
 
 @dataclass(frozen=True)
@@ -83,7 +92,7 @@ class TargetWeights:
     weights: dict[str, WeightValue]
 
 
-StrategyIntent = list[Order] | TargetWeights | dict[str, WeightValue]
+StrategyIntent = list[Order] | TargetWeights | dict[str, WeightValue] | None
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,7 @@ class MarketState:
     symbol: str
     price: Decimal
     prices: dict[str, Decimal] = field(default_factory=dict)
+    factor_data: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -188,9 +198,10 @@ class Strategy(Protocol):
 class DataFeed:
     """Validated deterministic multi-symbol simulated price feed."""
 
-    def __init__(self, events: list[MarketPriceEvent], input_files: list[str]) -> None:
+    def __init__(self, events: list[MarketPriceEvent], input_files: list[str], warnings: list[str]) -> None:
         self._events = events
         self._input_files = input_files
+        self.warnings = warnings
 
     @classmethod
     def from_dataset(cls, dataset_dir: Path | str) -> "DataFeed":
@@ -214,8 +225,16 @@ class DataFeed:
         events = _merge_market_events(raw_events)
         if len(events) < 2:
             raise SimulationInputError("market price inputs must contain at least two synchronized price rows.")
+        factor_path = root / "factors.csv"
+        warnings: list[str] = []
+        if factor_path.exists():
+            if not factor_path.is_file():
+                raise SimulationInputError("factors.csv must be a file.")
+            factor_events = _read_factors(factor_path)
+            events = _attach_factors(events, factor_events)
+            input_files.append("factors.csv")
 
-        return cls(events, input_files)
+        return cls(events, input_files, warnings)
 
     def __iter__(self) -> Iterable[MarketPriceEvent]:
         return iter(self._events)
@@ -552,10 +571,51 @@ class EqualWeightRebalanceStrategy:
         return []
 
 
+class PeriodicFactorWeightStrategy:
+    name = "PeriodicFactorWeight"
+
+    def __init__(self, factor_name: str, rebalance_interval: int = 20, top_k: int = 1) -> None:
+        if not factor_name.strip():
+            raise SimulationConfigError("PeriodicFactorWeight factor_name must be non-empty.")
+        if rebalance_interval <= 0:
+            raise SimulationConfigError("PeriodicFactorWeight rebalance_interval must be positive.")
+        if top_k <= 0:
+            raise SimulationConfigError("PeriodicFactorWeight top_k must be positive.")
+        self.factor_name = factor_name.strip()
+        self.rebalance_interval = rebalance_interval
+        self.top_k = top_k
+        self._tick_index = 0
+
+    def on_data(self, market_state: MarketState, account_state: AccountState) -> StrategyIntent:
+        del account_state
+        tick_index = self._tick_index
+        self._tick_index += 1
+        if tick_index % self.rebalance_interval != 0:
+            return None
+
+        candidates: list[tuple[float, str]] = []
+        for symbol in sorted(_state_prices(market_state)):
+            factor_value = market_state.factor_data.get(symbol, {}).get(self.factor_name)
+            if factor_value is None:
+                continue
+            candidates.append((factor_value, symbol))
+        if not candidates:
+            return None
+
+        selected = sorted(candidates, key=lambda item: (-item[0], item[1]))[: self.top_k]
+        weight = ONE_UNIT / Decimal(len(selected))
+        return TargetWeights({symbol: weight for _, symbol in sorted(selected, key=lambda item: item[1])})
+
+    def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
+        del final_event, account
+        return []
+
+
 STRATEGY_REGISTRY = {
     BuyAndHoldStrategy.name: BuyAndHoldStrategy,
     EqualWeightRebalanceStrategy.name: EqualWeightRebalanceStrategy,
     MovingAverageCrossStrategy.name: MovingAverageCrossStrategy,
+    PeriodicFactorWeightStrategy.name: PeriodicFactorWeightStrategy,
 }
 
 
@@ -593,6 +653,10 @@ class SimulationEngine:
             self._record_account_snapshot(event)
 
     def _execute_intent(self, event: MarketPriceEvent, market_state: MarketState, intent: StrategyIntent) -> None:
+        if intent is None:
+            return
+        if intent == {}:
+            return
         if isinstance(intent, TargetWeights) or isinstance(intent, dict):
             orders = self.rebalancer.orders_for_target_weights(intent, _account_state(self.account), market_state)
         else:
@@ -674,7 +738,7 @@ def run_simulation(
             orders=list(engine.orders),
             equity_curve=list(engine.equity_curve),
             input_files=feed.input_files + (["benchmark_prices.csv"] if not benchmark_feed.warnings else []),
-            warnings=list(benchmark_feed.warnings),
+            warnings=list(feed.warnings) + list(benchmark_feed.warnings),
         )
     except (SimulationInputError, SimulationExecutionError) as exc:
         return SimulationResult(
@@ -869,6 +933,16 @@ def create_strategy(strategy_name: str, strategy_params: dict[str, object]) -> S
             quantity=quantity,
             target_symbol=target_symbol,
         )
+    if strategy_class is PeriodicFactorWeightStrategy:
+        factor_name = _required_str_param(strategy_params, "factor_name")
+        rebalance_interval = _int_param(strategy_params, "rebalance_interval", 20)
+        top_k = _int_param(strategy_params, "top_k", 1)
+        _reject_unknown_params(strategy_params, {"factor_name", "rebalance_interval", "top_k"})
+        return PeriodicFactorWeightStrategy(
+            factor_name=factor_name,
+            rebalance_interval=rebalance_interval,
+            top_k=top_k,
+        )
 
     raise SimulationConfigError(f"Strategy {strategy_name!r} is registered but cannot be constructed.")
 
@@ -920,6 +994,100 @@ def _read_market_prices(path: Path, file_name: str) -> list[MarketPriceEvent]:
     except csv.Error as exc:
         raise SimulationInputError(f"{file_name} parse error: {exc}") from exc
     return rows
+
+
+def _read_factors(path: Path) -> list[FactorEvent]:
+    rows: list[FactorEvent] = []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            try:
+                raw_headers = next(reader)
+            except StopIteration:
+                raise SimulationInputError("factors.csv is empty.")
+
+            headers = [header.strip() for header in raw_headers]
+            for required in ["timestamp", "symbol", "factor_name", "factor_value"]:
+                if required not in headers:
+                    raise SimulationInputError(f"factors.csv missing required header: {required}.")
+
+            seen: set[tuple[datetime, str, str]] = set()
+            for row_number, raw_row in enumerate(reader, start=2):
+                if not raw_row or all(audit._is_blank(cell) for cell in raw_row):
+                    continue
+                if len(raw_row) > len(headers):
+                    raise SimulationInputError(f"factors.csv row {row_number} has more fields than headers.")
+                row = dict(zip(headers, raw_row + [""] * (len(headers) - len(raw_row))))
+                timestamp_text = row.get("timestamp", "")
+                symbol = row.get("symbol", "").strip()
+                factor_name = row.get("factor_name", "").strip()
+                factor_value_text = row.get("factor_value", "")
+                if audit._is_blank(timestamp_text):
+                    raise SimulationInputError(f"factors.csv row {row_number} missing timestamp.")
+                if symbol == "":
+                    raise SimulationInputError(f"factors.csv row {row_number} missing symbol.")
+                if factor_name == "":
+                    raise SimulationInputError(f"factors.csv row {row_number} missing factor_name.")
+                if audit._is_blank(factor_value_text):
+                    raise SimulationInputError(f"factors.csv row {row_number} missing factor_value.")
+
+                timestamp = audit._parse_timestamp(timestamp_text, "datetime")
+                if not isinstance(timestamp, datetime):
+                    raise SimulationInputError(f"factors.csv row {row_number} has invalid ISO datetime.")
+                factor_decimal = audit._parse_decimal(factor_value_text)
+                if factor_decimal is None:
+                    raise SimulationInputError(f"factors.csv row {row_number} has invalid finite factor_value.")
+                key = (timestamp, symbol, factor_name)
+                if key in seen:
+                    raise SimulationInputError(
+                        f"factors.csv row {row_number} duplicate timestamp/symbol/factor_name."
+                    )
+                seen.add(key)
+                rows.append(
+                    FactorEvent(
+                        timestamp=timestamp,
+                        symbol=symbol,
+                        factor_name=factor_name,
+                        factor_value=float(factor_decimal),
+                    )
+                )
+    except UnicodeDecodeError as exc:
+        raise SimulationInputError(f"factors.csv decode error: {exc}") from exc
+    except csv.Error as exc:
+        raise SimulationInputError(f"factors.csv parse error: {exc}") from exc
+    if rows:
+        _validate_comparable_factor_timestamps(rows, "factors.csv")
+    return rows
+
+
+def _attach_factors(events: list[MarketPriceEvent], factor_events: list[FactorEvent]) -> list[MarketPriceEvent]:
+    if not factor_events:
+        return events
+    sorted_factors = sorted(factor_events, key=lambda item: (item.timestamp, item.symbol, item.factor_name))
+    current: dict[str, dict[str, float]] = {}
+    factor_index = 0
+    enriched: list[MarketPriceEvent] = []
+    for event in events:
+        while factor_index < len(sorted_factors) and sorted_factors[factor_index].timestamp <= event.timestamp:
+            factor = sorted_factors[factor_index]
+            current.setdefault(factor.symbol, {})[factor.factor_name] = factor.factor_value
+            factor_index += 1
+        prices = _event_prices(event)
+        factor_data = {
+            symbol: dict(sorted(current.get(symbol, {}).items()))
+            for symbol in sorted(prices)
+            if current.get(symbol)
+        }
+        enriched.append(
+            MarketPriceEvent(
+                timestamp=event.timestamp,
+                symbol=event.symbol,
+                price=event.price,
+                prices=prices,
+                factor_data=factor_data,
+            )
+        )
+    return enriched
 
 
 def _market_price_files(root: Path) -> list[Path]:
@@ -979,6 +1147,13 @@ def _validate_one_symbol_price_events(events: list[MarketPriceEvent], file_name:
 
 
 def _validate_comparable_timestamps(events: list[MarketPriceEvent], file_name: str) -> None:
+    first = events[0].timestamp
+    for event in events[1:]:
+        if not audit._timestamps_are_comparable(first, event.timestamp):
+            raise SimulationInputError(f"{file_name} cannot mix timezone-aware and timezone-naive timestamps.")
+
+
+def _validate_comparable_factor_timestamps(events: list[FactorEvent], file_name: str) -> None:
     first = events[0].timestamp
     for event in events[1:]:
         if not audit._timestamps_are_comparable(first, event.timestamp):
@@ -1212,7 +1387,13 @@ def _input_files_payload(result: SimulationResult) -> list[str]:
 
 
 def _market_state(event: MarketPriceEvent) -> MarketState:
-    return MarketState(timestamp=event.timestamp, symbol=event.symbol, price=event.price, prices=_event_prices(event))
+    return MarketState(
+        timestamp=event.timestamp,
+        symbol=event.symbol,
+        price=event.price,
+        prices=_event_prices(event),
+        factor_data={symbol: dict(sorted(values.items())) for symbol, values in sorted(event.factor_data.items())},
+    )
 
 
 def _account_state(account: SimulatedAccount) -> AccountState:
@@ -1304,6 +1485,13 @@ def _optional_str_param(params: dict[str, object], key: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise SimulationConfigError(f"Strategy parameter {key} must be a non-empty string when provided.")
     return value.strip()
+
+
+def _required_str_param(params: dict[str, object], key: str) -> str:
+    value = _optional_str_param(params, key)
+    if value is None:
+        raise SimulationConfigError(f"Strategy parameter {key} is required.")
+    return value
 
 
 def _reject_unknown_params(params: dict[str, object], allowed_keys: set[str]) -> None:

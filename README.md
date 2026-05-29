@@ -9,7 +9,7 @@ The current baseline has four CLI layers:
 3. `validate_run`: replay validation for exported simulation run artifacts.
 4. `metrics`: deterministic post-run baseline and benchmark-relative metrics from exported artifacts.
 
-The long-term thesis is that strategies are presets running on common base rules. The system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before risk rules, richer strategy modeling, factor exposure modeling, or live integration.
+The long-term thesis is that strategies are presets running on common base rules. The system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before risk rules, factor attribution, loss classification, richer strategy modeling, or live integration.
 
 ## Quickstart
 
@@ -23,15 +23,12 @@ rtk python -m system_trading_s3.audit --strict tests/fixtures/valid_minimal
 # MVP1: run the thin paper-trading loop without writing artifacts
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
 
-# MVP4: run a configured strategy
-rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json
-
-# MVP7/MVP8: run a multi-symbol target-weight rebalance fixture
+# MVP7-MVP9: run a multi-symbol periodic factor rebalance fixture
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json
 
 # MVP2: export deterministic run artifacts
 $run = "$env:TEMP\systemtraders3-docs-smoke"
-rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json --export-dir $run --run-id docs-smoke --overwrite
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json --export-dir $run --run-id docs-smoke --overwrite
 
 # MVP2 self-check and MVP3 replay validation
 rtk python -m system_trading_s3.audit $run
@@ -40,6 +37,16 @@ rtk python -m system_trading_s3.validate_run $run
 # MVP5/MVP6: write deterministic baseline and benchmark-relative metrics
 rtk python -m system_trading_s3.metrics $run
 ```
+
+## Interactive Dashboard
+
+We provide a zero-dependency web dashboard to visualize simulation runs and run new backtests:
+
+```powershell
+# Start the local dashboard server (from the project root directory)
+python dashboard/server.py
+```
+Once running, open your browser and navigate to **http://localhost:8000** to view the interactive UI.
 
 All commands are local and simulated. `audit` and `validate_run` are read-only. `simulate --export-dir` writes deterministic artifacts only to the requested output directory.
 
@@ -54,6 +61,7 @@ All commands are local and simulated. `audit` and `validate_run` are read-only. 
 - MVP6 completed: engine-integrated benchmark logging and benchmark-relative metrics.
 - MVP7 completed: multi-symbol market ingestion and portfolio state accounting.
 - MVP8 completed: target-weight strategy intents and integer-share portfolio rebalancing.
+- MVP9 completed: optional factor data ingestion and periodic factor-weight rebalancing.
 
 ## MVP Responsibilities
 
@@ -77,7 +85,7 @@ MVP4 config-driven execution:
 - reads `initial_cash`, `strategy_name`, and `strategy_params`;
 - optionally reads `friction.fee_rate` and `friction.slippage_per_trade`;
 - optionally reads `risk_free_rate` for Sharpe ratio calculations;
-- supports a static registry with `BuyAndHold`, `MovingAverageCross`, and `EqualWeightRebalance`;
+- supports a static registry with `BuyAndHold`, `MovingAverageCross`, `EqualWeightRebalance`, and `PeriodicFactorWeight`;
 - allows strategies to emit explicit orders or target weights;
 - keeps execution sizing, fill routing, friction accounting, and account mutation inside the engine.
 
@@ -87,6 +95,14 @@ MVP8 rebalancing:
 - sells alphabetically before buying alphabetically;
 - accounts for configured fee and slippage when checking affordability;
 - never intentionally generates orders that would make simulated cash negative.
+
+MVP9 factor rebalancing:
+
+- optionally reads `factors.csv` using `timestamp,symbol,factor_name,factor_value`;
+- forward-fills factor values onto synchronized market timestamps;
+- passes strategies `factor_data` as `{symbol: {factor_name: value}}`;
+- adds `PeriodicFactorWeight`, which rebalances every configured number of ticks into the top-K symbols by factor value;
+- keeps the `PortfolioRebalancer` factor-agnostic.
 
 MVP2 export:
 
@@ -133,7 +149,7 @@ Optional:
 - `benchmark.csv`
 - `factor_exposure.csv`
 
-MVP1+ simulation accepts either normalized `market_prices.csv` or multiple sorted `*_prices.csv` files, each using `timestamp,symbol,price`. MVP6+ also accepts optional `benchmark_prices.csv`; the simulator forward-fills benchmark prices onto market timestamps and normalizes benchmark equity from the same initial cash.
+MVP1+ simulation accepts either normalized `market_prices.csv` or multiple sorted `*_prices.csv` files, each using `timestamp,symbol,price`. MVP6+ also accepts optional `benchmark_prices.csv`; the simulator forward-fills benchmark prices onto market timestamps and normalizes benchmark equity from the same initial cash. MVP9 also accepts optional `factors.csv` using `timestamp,symbol,factor_name,factor_value`; missing factors do not block non-factor strategies.
 
 CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are accepted. Header whitespace is trimmed, header names remain case-sensitive, unknown extra columns are allowed, and blank required cells are treated as missing rather than zero.
 
@@ -146,7 +162,7 @@ CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are a
 - No optimization.
 - No opaque ML prediction.
 - No dashboard.
-- No factor-relative metrics yet.
+- No factor attribution or factor-relative loss classification yet.
 - No richer risk-adjusted metrics such as Sortino, capture, or turnover yet.
 - No per-symbol metrics yet; metrics evaluate portfolio-level equity only.
 - No claim that any strategy is profitable.

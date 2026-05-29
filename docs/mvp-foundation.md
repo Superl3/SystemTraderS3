@@ -4,7 +4,7 @@
 
 This project is not an alpha-discovery bot and must not promise profit. Strategies are presets running on common base rules. Losses may be acceptable when they come from intended market or factor exposure. Unexplained, excessive, structural, execution, system, data, or order-related losses are failure signals that later phases should classify explicitly.
 
-The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation, to basic post-run metrics and benchmark-relative metrics. It does not yet attempt factor exposure modeling, risk classification, or claims about strategy quality.
+The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation, to basic post-run metrics and benchmark-relative metrics, to periodic factor-driven rebalancing. It does not yet attempt factor attribution, risk classification, or claims about strategy quality.
 
 ## Non-Goals
 
@@ -50,13 +50,13 @@ MVP1 simulate:
 
 ```powershell
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
-rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json
 ```
 
 MVP2 export:
 
 ```powershell
-rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --export-dir <run_dir> --run-id docs-smoke
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json --export-dir <run_dir> --run-id docs-smoke
 ```
 
 MVP3 validate:
@@ -71,7 +71,7 @@ MVP5/MVP6 metrics:
 rtk python -m system_trading_s3.metrics <run_dir>
 ```
 
-`market_prices.csv` or sorted `*_prices.csv` files are the true simulation inputs for MVP1+. Optional `benchmark_prices.csv` is read by the simulation engine, forward-filled onto market timestamps, and exported as normalized benchmark equity. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
+`market_prices.csv` or sorted `*_prices.csv` files are the true simulation inputs for MVP1+. Optional `benchmark_prices.csv` is read by the simulation engine, forward-filled onto market timestamps, and exported as normalized benchmark equity. Optional `factors.csv` is read by the simulation engine, forward-filled onto market timestamps, and exposed to strategies as cross-sectional factor data. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
 
 ## CSV Policy
 
@@ -113,7 +113,9 @@ Completed MVP7: multi-symbol market ingestion and portfolio state accounting.
 
 Completed MVP8: target-weight strategy intents and integer-share portfolio rebalancing.
 
-Candidate MVP9: factor exposure inputs and factor-relative metrics using explicit target series.
+Completed MVP9: optional factor data ingestion and periodic factor-weight rebalancing.
+
+Candidate MVP10: factor-aware reporting or loss classification using explicit target factor definitions.
 
 Later phase: richer risk-adjusted metrics.
 
@@ -130,9 +132,10 @@ Later phase: small-capital live validation criteria only.
 ## Current Limitations
 
 - Default no-config behavior still uses the legacy `buy_and_hold_one_unit` strategy.
-- Config-driven runs support only `BuyAndHold`, `MovingAverageCross`, and `EqualWeightRebalance`.
-- Strategy behavior is portfolio-capable but still simple: current built-ins either act across available symbols, use an optional `target_symbol`, or emit one-shot equal weights.
+- Config-driven runs support only `BuyAndHold`, `MovingAverageCross`, `EqualWeightRebalance`, and `PeriodicFactorWeight`.
+- Strategy behavior is portfolio-capable but still simple: current built-ins either act across available symbols, use an optional `target_symbol`, emit one-shot equal weights, or periodically rebalance to top-K symbols by one factor.
 - Rebalancing uses integer shares, deterministic symbol ordering, and no optimizer.
+- Factor data is optional, forward-filled, and used only by strategies that explicitly request it.
 - Immediate fills only.
 - Friction is deterministic only: percentage fee plus fixed slippage per fill.
 - Benchmark synchronization is deterministic forward-fill only.
@@ -142,7 +145,7 @@ Later phase: small-capital live validation criteria only.
 - No generated factor exposure data.
 - Performance metrics are still narrow: total return, row-interval CAGR, max drawdown, realized-PnL win rate, profit factor, trade counts, alpha, beta, Sharpe ratio, tracking error, and information ratio.
 - Metrics evaluate portfolio-level equity only, not per-symbol attribution.
-- No factor-relative analysis yet.
+- No factor attribution or factor-relative loss classification yet.
 - No live trading, broker integration, dashboard, optimization, or ML.
 
 ## Future Data Requirements

@@ -27,14 +27,13 @@ def export_fixture_run(root: Path, run_id: str = "mvp3-test") -> Path:
 
 def export_friction_run(root: Path, run_id: str = "mvp5-test") -> Path:
     export_dir = root / "run"
-    config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
-    strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+    strategy = simulate.create_strategy("EqualWeightRebalance", {})
     result = simulate.run_simulation(
         FIXTURES / "valid_complete",
-        config.initial_cash,
+        Decimal("1000"),
         strategy,
-        config.friction,
-        config.risk_free_rate,
+        simulate.FrictionModel(fee_rate=Decimal("0.0005"), slippage_per_trade=Decimal("0.01")),
+        Decimal("0.02"),
     )
     simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id=run_id)
     return export_dir
@@ -109,11 +108,11 @@ class ValidateRunTests(unittest.TestCase):
             result = validate_run.validate_run_artifacts(run_dir)
         self.assertEqual(validate_run.PASS, result.status)
         self.assertEqual("mvp7-test", result.run_id)
-        self.assertEqual(2, result.order_count)
-        self.assertEqual(2, result.fill_count)
-        self.assertEqual(Decimal("49.5050"), result.replayed_final_cash)
-        self.assertEqual({"AAA": Decimal("5"), "BBB": Decimal("9")}, result.replayed_final_positions)
-        self.assertEqual(Decimal("1054.5050"), result.replayed_final_equity)
+        self.assertEqual(3, result.order_count)
+        self.assertEqual(3, result.fill_count)
+        self.assertEqual(Decimal("26.5660"), result.replayed_final_cash)
+        self.assertEqual({"BBB": Decimal("18")}, result.replayed_final_positions)
+        self.assertEqual(Decimal("1016.5660"), result.replayed_final_equity)
 
     def test_missing_required_artifact_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

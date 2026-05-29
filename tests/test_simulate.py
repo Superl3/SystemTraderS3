@@ -193,21 +193,23 @@ class SimulationTests(unittest.TestCase):
     def test_multisymbol_price_files_forward_fill_and_run(self) -> None:
         feed = simulate.DataFeed.from_dataset(FIXTURES / "valid_multisymbol")
         events = feed.events
-        self.assertEqual(["AAA_prices.csv", "BBB_prices.csv"], feed.input_files)
+        self.assertEqual(["AAA_prices.csv", "BBB_prices.csv", "factors.csv"], feed.input_files)
         self.assertEqual(3, len(events))
         self.assertEqual({"AAA": Decimal("100"), "BBB": Decimal("50")}, events[0].prices)
         self.assertEqual({"AAA": Decimal("101"), "BBB": Decimal("50")}, events[1].prices)
         self.assertEqual({"AAA": Decimal("102"), "BBB": Decimal("55")}, events[2].prices)
+        self.assertEqual({"AAA": {"momentum": 1.2}, "BBB": {"momentum": 0.8}}, events[0].factor_data)
+        self.assertEqual({"AAA": {"momentum": 1.2}, "BBB": {"momentum": 0.8}}, events[1].factor_data)
+        self.assertEqual({"AAA": {"momentum": 0.7}, "BBB": {"momentum": 1.5}}, events[2].factor_data)
 
     def test_equal_weight_rebalance_handles_multisymbol_portfolio(self) -> None:
-        config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
-        strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+        strategy = simulate.create_strategy("EqualWeightRebalance", {})
         result = simulate.run_simulation(
             FIXTURES / "valid_multisymbol",
-            config.initial_cash,
+            Decimal("1000"),
             strategy,
-            config.friction,
-            config.risk_free_rate,
+            simulate.FrictionModel(fee_rate=Decimal("0.0005"), slippage_per_trade=Decimal("0.01")),
+            Decimal("0.02"),
         )
         self.assertEqual(simulate.PASS, result.status)
         self.assertEqual(2, result.order_count)
@@ -226,13 +228,16 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(Decimal("1002"), override_result.final_cash)
 
     def test_strategy_registry_exposes_configured_strategies(self) -> None:
-        self.assertEqual({"BuyAndHold", "EqualWeightRebalance", "MovingAverageCross"}, set(simulate.STRATEGY_REGISTRY))
+        self.assertEqual(
+            {"BuyAndHold", "EqualWeightRebalance", "MovingAverageCross", "PeriodicFactorWeight"},
+            set(simulate.STRATEGY_REGISTRY),
+        )
 
     def test_load_simulation_config_parses_sample_config(self) -> None:
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
         self.assertEqual(Decimal("1000"), config.initial_cash)
-        self.assertEqual("EqualWeightRebalance", config.strategy_name)
-        self.assertEqual({}, config.strategy_params)
+        self.assertEqual("PeriodicFactorWeight", config.strategy_name)
+        self.assertEqual({"factor_name": "momentum", "rebalance_interval": 2, "top_k": 1}, config.strategy_params)
         self.assertEqual(Decimal("0.0005"), config.friction.fee_rate)
         self.assertEqual(Decimal("0.01"), config.friction.slippage_per_trade)
         self.assertEqual(Decimal("0.02"), config.risk_free_rate)
@@ -290,6 +295,38 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual({"AAA": Decimal("0.5"), "BBB": Decimal("0.5")}, intent.weights)
         self.assertEqual([], strategy.on_data(state, simulate.AccountState(cash=Decimal("1000"), positions={})))
 
+    def test_periodic_factor_weight_strategy_outputs_scheduled_target_weights(self) -> None:
+        strategy = simulate.create_strategy("PeriodicFactorWeight", {"factor_name": "momentum", "rebalance_interval": 2, "top_k": 1})
+        first = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-01T09:30:00", "datetime"),
+            symbol="AAA",
+            price=Decimal("100"),
+            prices={"AAA": Decimal("100"), "BBB": Decimal("50")},
+            factor_data={"AAA": {"momentum": 1.2}, "BBB": {"momentum": 0.8}},
+        )
+        second = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-02T09:30:00", "datetime"),
+            symbol="AAA",
+            price=Decimal("101"),
+            prices={"AAA": Decimal("101"), "BBB": Decimal("50")},
+            factor_data={"AAA": {"momentum": 1.2}, "BBB": {"momentum": 0.8}},
+        )
+        third = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-03T09:30:00", "datetime"),
+            symbol="AAA",
+            price=Decimal("102"),
+            prices={"AAA": Decimal("102"), "BBB": Decimal("55")},
+            factor_data={"AAA": {"momentum": 0.7}, "BBB": {"momentum": 1.5}},
+        )
+
+        first_intent = strategy.on_data(first, simulate.AccountState(cash=Decimal("1000"), positions={}))
+        self.assertIsInstance(first_intent, simulate.TargetWeights)
+        self.assertEqual({"AAA": Decimal("1")}, first_intent.weights)
+        self.assertIsNone(strategy.on_data(second, simulate.AccountState(cash=Decimal("1000"), positions={})))
+        third_intent = strategy.on_data(third, simulate.AccountState(cash=Decimal("1000"), positions={}))
+        self.assertIsInstance(third_intent, simulate.TargetWeights)
+        self.assertEqual({"BBB": Decimal("1")}, third_intent.weights)
+
     def test_portfolio_rebalancer_respects_insufficient_cash(self) -> None:
         rebalancer = simulate.PortfolioRebalancer(
             simulate.FrictionModel(fee_rate=Decimal("0.0005"), slippage_per_trade=Decimal("0.01"))
@@ -324,21 +361,21 @@ class SimulationTests(unittest.TestCase):
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
         strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
         result = simulate.run_simulation(
-            FIXTURES / "valid_complete",
+            FIXTURES / "valid_multisymbol",
             config.initial_cash,
             strategy,
             config.friction,
             config.risk_free_rate,
         )
         self.assertEqual(simulate.PASS, result.status)
-        self.assertEqual("EqualWeightRebalance", result.strategy_name)
-        self.assertEqual(1, result.order_count)
-        self.assertEqual(1, result.fill_count)
-        self.assertEqual(Decimal("99.5400"), result.final_cash)
-        self.assertEqual({"SIM": Decimal("9")}, result.final_positions)
-        self.assertEqual(Decimal("1017.5400"), result.final_equity)
-        self.assertEqual(Decimal("0.4500"), result.total_fees)
-        self.assertEqual(Decimal("0.01"), result.total_slippage)
+        self.assertEqual("PeriodicFactorWeight", result.strategy_name)
+        self.assertEqual(3, result.order_count)
+        self.assertEqual(3, result.fill_count)
+        self.assertEqual(Decimal("26.5660"), result.final_cash)
+        self.assertEqual({"BBB": Decimal("18")}, result.final_positions)
+        self.assertEqual(Decimal("1016.5660"), result.final_equity)
+        self.assertEqual(Decimal("1.4040"), result.total_fees)
+        self.assertEqual(Decimal("0.03"), result.total_slippage)
         self.assertEqual(Decimal("0.4500"), result.fills[0].fee)
         self.assertEqual(Decimal("0.01"), result.fills[0].slippage)
 
@@ -404,7 +441,7 @@ class SimulationCliTests(unittest.TestCase):
                 sys.executable,
                 "-m",
                 "system_trading_s3.simulate",
-                str(FIXTURES / "valid_complete"),
+                str(FIXTURES / "valid_multisymbol"),
                 "--config",
                 str(FIXTURES / "sample_config.json"),
             ],
@@ -415,10 +452,10 @@ class SimulationCliTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, completed.returncode)
-        self.assertIn("STRATEGY: EqualWeightRebalance", completed.stdout)
+        self.assertIn("STRATEGY: PeriodicFactorWeight", completed.stdout)
         self.assertIn("INITIAL CASH: 1000", completed.stdout)
-        self.assertIn("FINAL CASH: 99.5400", completed.stdout)
-        self.assertIn("FINAL POSITIONS: SIM:9", completed.stdout)
+        self.assertIn("FINAL CASH: 26.5660", completed.stdout)
+        self.assertIn("FINAL POSITIONS: BBB:18", completed.stdout)
 
     def test_cli_config_export_validates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -428,7 +465,7 @@ class SimulationCliTests(unittest.TestCase):
                     sys.executable,
                     "-m",
                     "system_trading_s3.simulate",
-                    str(FIXTURES / "valid_complete"),
+                    str(FIXTURES / "valid_multisymbol"),
                     "--config",
                     str(FIXTURES / "sample_config.json"),
                     "--export-dir",
@@ -453,7 +490,7 @@ class SimulationCliTests(unittest.TestCase):
             )
         self.assertEqual(0, validation.returncode)
         self.assertIn("VALIDATION STATUS: PASS", validation.stdout)
-        self.assertIn("STRATEGY: EqualWeightRebalance", validation.stdout)
+        self.assertIn("STRATEGY: PeriodicFactorWeight", validation.stdout)
 
 
 class SimulationExportTests(unittest.TestCase):
@@ -514,14 +551,13 @@ class SimulationExportTests(unittest.TestCase):
     def test_export_records_configured_friction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             export_dir = Path(tmp) / "run"
-            config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
-            strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+            strategy = simulate.create_strategy("EqualWeightRebalance", {})
             result = simulate.run_simulation(
                 FIXTURES / "valid_complete",
-                config.initial_cash,
+                Decimal("1000"),
                 strategy,
-                config.friction,
-                config.risk_free_rate,
+                simulate.FrictionModel(fee_rate=Decimal("0.0005"), slippage_per_trade=Decimal("0.01")),
+                Decimal("0.02"),
             )
             simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="mvp5-test")
             account_summary = json.loads((export_dir / "account_summary.json").read_text(encoding="utf-8"))
@@ -555,8 +591,8 @@ class SimulationExportTests(unittest.TestCase):
             manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
             equity_curve = (export_dir / "equity_curve.csv").read_text(encoding="utf-8").splitlines()
 
-        self.assertEqual({"AAA": "5", "BBB": "9"}, account_summary["final_positions"])
-        self.assertEqual(["AAA_prices.csv", "BBB_prices.csv", "benchmark_prices.csv"], manifest["input_files"])
+        self.assertEqual({"BBB": "18"}, account_summary["final_positions"])
+        self.assertEqual(["AAA_prices.csv", "BBB_prices.csv", "factors.csv", "benchmark_prices.csv"], manifest["input_files"])
         self.assertTrue(any("PORTFOLIO" in row and "\"\"AAA\"\":\"\"102\"\"" in row for row in equity_curve))
 
     def test_orders_and_fills_contain_expected_buy_and_sell_records(self) -> None:
