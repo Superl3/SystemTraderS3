@@ -4,7 +4,7 @@
 
 This project is not an alpha-discovery bot and must not promise profit. Strategies are presets running on common base rules. Losses may be acceptable when they come from intended market or factor exposure. Unexplained, excessive, structural, execution, system, data, or order-related losses are failure signals that later phases should classify explicitly.
 
-The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation. It does not yet attempt strategy quality, benchmark-relative evaluation, or risk classification.
+The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation, to basic post-run metrics. It does not yet attempt benchmark-relative evaluation, risk classification, or claims about strategy quality.
 
 ## Non-Goals
 
@@ -65,6 +65,12 @@ MVP3 validate:
 rtk python -m system_trading_s3.validate_run <run_dir>
 ```
 
+MVP5 metrics:
+
+```powershell
+rtk python -m system_trading_s3.metrics <run_dir>
+```
+
 `market_prices.csv` is the true simulation input for MVP1+. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
 
 ## CSV Policy
@@ -99,11 +105,11 @@ Completed MVP3: run artifact replay and baseline accounting validation.
 
 Completed MVP4: config-driven execution with a static strategy registry.
 
-Candidate MVP5: small strategy/config documentation and run examples, or a very narrow friction model that preserves existing artifact validation.
+Completed MVP5: deterministic transaction friction and post-run baseline metrics.
 
-Later phase: richer metrics.
+Candidate MVP6: benchmark and factor-relative metrics using explicit target series.
 
-Later phase: benchmark and factor-relative metrics.
+Later phase: richer risk-adjusted metrics.
 
 Later phase: loss classification.
 
@@ -121,12 +127,12 @@ Later phase: small-capital live validation criteria only.
 - Default no-config behavior still uses the legacy `buy_and_hold_one_unit` strategy.
 - Config-driven runs support only `BuyAndHold` and `MovingAverageCross`.
 - Immediate fills only.
-- Zero fee and zero slippage.
+- Friction is deterministic only: percentage fee plus fixed slippage per fill.
 - No partial fills.
 - No richer order lifecycle.
 - No risk budget, sizing model, exposure limits, cooldown, or kill switch.
 - No generated benchmark or factor exposure data.
-- No performance metrics beyond final account state.
+- Performance metrics are baseline-only: total return, row-interval CAGR, max drawdown, realized-PnL win rate, profit factor, and trade counts.
 - No benchmark-relative or factor-relative analysis.
 - No live trading, broker integration, dashboard, optimization, or ML.
 

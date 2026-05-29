@@ -2,13 +2,14 @@
 
 SystemTradingS3 is a simulated trading systems skeleton. It is not an alpha-discovery bot and must not promise profit.
 
-The current baseline has three CLI layers:
+The current baseline has four CLI layers:
 
 1. `audit`: read-only structural audit for generated or provided simulation datasets.
 2. `simulate`: config-driven paper-trading loop using simulated market prices.
 3. `validate_run`: replay validation for exported simulation run artifacts.
+4. `metrics`: deterministic post-run baseline metrics from exported artifacts.
 
-The long-term thesis is that strategies are presets running on common base rules. A future system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before richer metrics, strategy selection, risk rules, or live integration.
+The long-term thesis is that strategies are presets running on common base rules. A future system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before benchmark-relative evaluation, risk rules, richer strategy modeling, or live integration.
 
 ## Quickstart
 
@@ -32,6 +33,9 @@ rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config 
 # MVP2 self-check and MVP3 replay validation
 rtk python -m system_trading_s3.audit $run
 rtk python -m system_trading_s3.validate_run $run
+
+# MVP5: write deterministic baseline metrics
+rtk python -m system_trading_s3.metrics $run
 ```
 
 All commands are local and simulated. `audit` and `validate_run` are read-only. `simulate --export-dir` writes deterministic artifacts only to the requested output directory.
@@ -43,6 +47,7 @@ All commands are local and simulated. `audit` and `validate_run` are read-only. 
 - MVP2 completed: deterministic run artifact export.
 - MVP3 completed: run artifact replay and baseline accounting validation.
 - MVP4 completed: config-driven strategy selection from a static registry.
+- MVP5 completed: deterministic transaction friction and post-run baseline metrics.
 
 ## MVP Responsibilities
 
@@ -63,6 +68,7 @@ MVP4 config-driven execution:
 
 - accepts `--config <json>`;
 - reads `initial_cash`, `strategy_name`, and `strategy_params`;
+- optionally reads `friction.fee_rate` and `friction.slippage_per_trade`;
 - supports a static registry with `BuyAndHold` and `MovingAverageCross`;
 - keeps strategies as order-intent generators while the engine owns account mutation.
 
@@ -75,7 +81,14 @@ MVP2 export:
 MVP3 validate_run:
 
 - reads an exported run without rerunning simulation;
-- validates required artifacts, manifest/account consistency, order/fill consistency, accounting replay, final equity, current trades/fills mapping, and audit summary status.
+- validates required artifacts, manifest/account consistency, order/fill consistency, friction-aware accounting replay, final equity, current trades/fills mapping, and audit summary status.
+
+MVP5 metrics:
+
+- reads exported `equity_curve.csv` and `trades.csv`;
+- writes deterministic `metrics.json`;
+- calculates total return, CAGR using equity row intervals with 252 trading days/year, max drawdown, realized-PnL win rate, profit factor, and trade counts;
+- reports `UNAVAILABLE` and gaps rather than inferring missing realized PnL.
 
 ## Audit Status
 
@@ -113,7 +126,7 @@ CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are a
 - No opaque ML prediction.
 - No dashboard.
 - No benchmark-relative metrics yet.
-- No performance metrics such as return, drawdown, Sharpe, beta, tracking error, win rate, or turnover yet.
+- No risk-adjusted or benchmark/factor-relative metrics such as Sharpe, beta, tracking error, capture, or turnover yet.
 - No claim that any strategy is profitable.
 
 See `schemas/` for the exact contracts and `docs/mvp-foundation.md` for the staged roadmap and limitations.

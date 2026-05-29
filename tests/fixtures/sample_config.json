@@ -3,5 +3,9 @@
   "strategy_name": "BuyAndHold",
   "strategy_params": {
     "quantity": "1"
+  },
+  "friction": {
+    "fee_rate": 0.0005,
+    "slippage_per_trade": "0.01"
   }
 }

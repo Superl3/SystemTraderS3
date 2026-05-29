@@ -21,6 +21,7 @@ PASS = "PASS"
 FAIL = "FAIL"
 DEFAULT_INITIAL_CASH = Decimal("100000")
 ONE_UNIT = Decimal("1")
+ZERO = Decimal("0")
 STRATEGY_NAME = "buy_and_hold_one_unit"
 DEFAULT_RUN_ID = "default"
 SIMULATION_PRESET_NAME = "market_follow"
@@ -89,6 +90,8 @@ class Fill:
     price: Decimal
     order_id: str = ""
     fill_id: str = ""
+    fee: Decimal = ZERO
+    slippage: Decimal = ZERO
 
 
 @dataclass(frozen=True)
@@ -122,6 +125,9 @@ class SimulationResult:
     order_count: int
     fill_count: int
     final_equity: Decimal | None
+    friction: FrictionModel
+    total_fees: Decimal
+    total_slippage: Decimal
     fills: list[Fill]
     orders: list[OrderRecord]
     equity_curve: list[AccountSnapshot]
@@ -129,10 +135,17 @@ class SimulationResult:
 
 
 @dataclass(frozen=True)
+class FrictionModel:
+    fee_rate: Decimal = ZERO
+    slippage_per_trade: Decimal = ZERO
+
+
+@dataclass(frozen=True)
 class SimulationConfig:
     initial_cash: Decimal
     strategy_name: str
     strategy_params: dict[str, object]
+    friction: FrictionModel = FrictionModel()
 
 
 class Strategy(Protocol):
@@ -196,14 +209,15 @@ class SimulatedAccount:
 
     def apply_fill(self, fill: Fill) -> None:
         notional = fill.quantity * fill.price
+        cash_cost = fill.fee + fill.slippage
         current_position = self.positions.get(fill.symbol, Decimal("0"))
 
         if fill.side == "buy":
-            if self.cash < notional:
+            if self.cash < notional + cash_cost:
                 raise SimulationExecutionError(
                     f"Insufficient cash to buy {format_decimal(fill.quantity)} {fill.symbol} at {format_decimal(fill.price)}."
                 )
-            self.cash -= notional
+            self.cash -= notional + cash_cost
             self.positions[fill.symbol] = current_position + fill.quantity
             return
 
@@ -212,7 +226,7 @@ class SimulatedAccount:
                 raise SimulationExecutionError(
                     f"Insufficient position to sell {format_decimal(fill.quantity)} {fill.symbol}."
                 )
-            self.cash += notional
+            self.cash += notional - cash_cost
             new_position = current_position - fill.quantity
             if new_position == 0:
                 self.positions.pop(fill.symbol, None)
@@ -232,7 +246,15 @@ class SimulatedAccount:
 
 
 class ExecutionSimulator:
+    def __init__(self, friction: FrictionModel = FrictionModel()) -> None:
+        if friction.fee_rate < 0 or friction.slippage_per_trade < 0:
+            raise SimulationInputError("friction values must be nonnegative.")
+        self.friction = friction
+
     def fill(self, timestamp: datetime, order: Order, order_id: str = "", fill_id: str = "") -> Fill:
+        notional = order.quantity * order.price
+        fee = notional * self.friction.fee_rate
+        slippage = self.friction.slippage_per_trade
         return Fill(
             timestamp=timestamp,
             side=order.side,
@@ -241,6 +263,8 @@ class ExecutionSimulator:
             price=order.price,
             order_id=order_id,
             fill_id=fill_id,
+            fee=fee,
+            slippage=slippage,
         )
 
 
@@ -390,17 +414,21 @@ def run_simulation(
     dataset_dir: Path | str,
     initial_cash: Decimal = DEFAULT_INITIAL_CASH,
     strategy: Strategy | None = None,
+    friction: FrictionModel = FrictionModel(),
 ) -> SimulationResult:
     dataset_path = Path(dataset_dir)
     audit_status = _audit_status_for_context(dataset_path)
+    strategy_name = strategy.name if strategy is not None else STRATEGY_NAME
 
     try:
         feed = DataFeed.from_dataset(dataset_path)
         account = SimulatedAccount(initial_cash)
         selected_strategy = strategy if strategy is not None else BuyAndHoldOneUnitStrategy()
-        engine = SimulationEngine(feed, account, selected_strategy, ExecutionSimulator())
+        engine = SimulationEngine(feed, account, selected_strategy, ExecutionSimulator(friction))
         engine.run()
         final_equity = account.final_equity(engine.last_prices)
+        total_fees = sum((fill.fee for fill in engine.fills), ZERO)
+        total_slippage = sum((fill.slippage for fill in engine.fills), ZERO)
         return SimulationResult(
             status=PASS,
             dataset=str(dataset_path),
@@ -412,6 +440,9 @@ def run_simulation(
             order_count=engine.order_count,
             fill_count=len(engine.fills),
             final_equity=final_equity,
+            friction=friction,
+            total_fees=total_fees,
+            total_slippage=total_slippage,
             fills=list(engine.fills),
             orders=list(engine.orders),
             equity_curve=list(engine.equity_curve),
@@ -421,13 +452,16 @@ def run_simulation(
             status=FAIL,
             dataset=str(dataset_path),
             audit_status=audit_status,
-            strategy_name=STRATEGY_NAME,
+            strategy_name=strategy_name,
             initial_cash=initial_cash,
             final_cash=None,
             final_positions={},
             order_count=0,
             fill_count=0,
             final_equity=None,
+            friction=friction,
+            total_fees=ZERO,
+            total_slippage=ZERO,
             fills=[],
             orders=[],
             equity_curve=[],
@@ -476,7 +510,8 @@ def main(argv: list[str] | None = None) -> int:
         config = load_simulation_config(args.config) if args.config is not None else None
         selected_initial_cash = config.initial_cash if config is not None else args.initial_cash
         selected_strategy = create_strategy(config.strategy_name, config.strategy_params) if config is not None else None
-        result = run_simulation(args.dataset_dir, selected_initial_cash, selected_strategy)
+        selected_friction = config.friction if config is not None else FrictionModel()
+        result = run_simulation(args.dataset_dir, selected_initial_cash, selected_strategy, selected_friction)
     except SimulationConfigError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 2
@@ -547,6 +582,7 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
     initial_cash_value = payload.get("initial_cash")
     strategy_name = payload.get("strategy_name")
     strategy_params = payload.get("strategy_params")
+    friction_payload = payload.get("friction", {})
 
     if not isinstance(initial_cash_value, str):
         raise SimulationConfigError("Config initial_cash must be a decimal string.")
@@ -557,7 +593,13 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
         raise SimulationConfigError("Config strategy_name must be a non-empty string.")
     if not isinstance(strategy_params, dict):
         raise SimulationConfigError("Config strategy_params must be an object.")
-    return SimulationConfig(initial_cash=initial_cash, strategy_name=strategy_name.strip(), strategy_params=strategy_params)
+    friction = _parse_friction_config(friction_payload)
+    return SimulationConfig(
+        initial_cash=initial_cash,
+        strategy_name=strategy_name.strip(),
+        strategy_params=strategy_params,
+        friction=friction,
+    )
 
 
 def create_strategy(strategy_name: str, strategy_params: dict[str, object]) -> Strategy:
@@ -647,10 +689,16 @@ def _manifest_payload(result: SimulationResult, dataset_dir: Path, run_id: str) 
         "strategy_name": result.strategy_name,
         "initial_cash": format_decimal(result.initial_cash),
         "input_files": ["market_prices.csv"],
+        "friction": {
+            "fee_rate": format_decimal(_result_fee_rate(result)),
+            "slippage_per_trade": format_decimal(_result_slippage_per_trade(result)),
+            "total_fees": format_decimal(result.total_fees),
+            "total_slippage": format_decimal(result.total_slippage),
+        },
         "simulation_assumptions": [
             "immediate fills",
-            "zero fee",
-            "zero slippage",
+            _fee_assumption(result),
+            _slippage_assumption(result),
             "one symbol only",
             "one deterministic strategy selected from a static registry or default legacy strategy",
         ],
@@ -667,6 +715,8 @@ def _account_summary_payload(result: SimulationResult) -> dict[str, object]:
         "order_count": result.order_count,
         "fill_count": result.fill_count,
         "trade_count": len(result.fills),
+        "total_fees": format_decimal(result.total_fees),
+        "total_slippage": format_decimal(result.total_slippage),
         "status": result.status,
     }
 
@@ -715,14 +765,19 @@ def _write_trades(path: Path, result: SimulationResult) -> None:
         "order_id",
         "fill_id",
     ]
-    buy_prices: dict[str, Decimal] = {}
+    buy_lots: dict[str, list[dict[str, Decimal]]] = {}
     rows: list[list[str]] = []
     for index, fill in enumerate(result.fills, start=1):
         realized_pnl = ""
+        fill_cost = fill.fee + fill.slippage
         if fill.side == "buy":
-            buy_prices[fill.symbol] = fill.price
-        elif fill.side == "sell" and fill.symbol in buy_prices:
-            realized_pnl = format_decimal((fill.price - buy_prices[fill.symbol]) * fill.quantity)
+            buy_lots.setdefault(fill.symbol, []).append(
+                {"quantity": fill.quantity, "price": fill.price, "cost": fill_cost}
+            )
+        elif fill.side == "sell":
+            realized = _realized_pnl_for_sell(fill, buy_lots.get(fill.symbol, []))
+            if realized is not None:
+                realized_pnl = format_decimal(realized)
         rows.append(
             [
                 fill.timestamp.isoformat(),
@@ -731,7 +786,7 @@ def _write_trades(path: Path, result: SimulationResult) -> None:
                 fill.side,
                 format_decimal(fill.quantity),
                 format_decimal(fill.price),
-                "0",
+                format_decimal(fill_cost),
                 realized_pnl,
                 fill.symbol,
                 result.strategy_name,
@@ -771,8 +826,8 @@ def _write_fills(path: Path, result: SimulationResult) -> None:
             fill.side,
             format_decimal(fill.quantity),
             format_decimal(fill.price),
-            "0",
-            "0",
+            format_decimal(fill.fee),
+            format_decimal(fill.slippage),
         ]
         for fill in result.fills
     ]
@@ -810,6 +865,81 @@ def _decimal_param(params: dict[str, object], key: str, default: Decimal) -> Dec
     if parsed is None:
         raise SimulationConfigError(f"Strategy parameter {key} must be a finite decimal.")
     return parsed
+
+
+def _parse_friction_config(value: object) -> FrictionModel:
+    if value is None:
+        return FrictionModel()
+    if not isinstance(value, dict):
+        raise SimulationConfigError("Config friction must be an object.")
+    fee_rate = _decimal_config_value(value, "fee_rate", ZERO)
+    slippage_per_trade = _decimal_config_value(value, "slippage_per_trade", ZERO)
+    if fee_rate < 0:
+        raise SimulationConfigError("Config friction.fee_rate must be nonnegative.")
+    if slippage_per_trade < 0:
+        raise SimulationConfigError("Config friction.slippage_per_trade must be nonnegative.")
+    return FrictionModel(fee_rate=fee_rate, slippage_per_trade=slippage_per_trade)
+
+
+def _decimal_config_value(params: dict[str, object], key: str, default: Decimal) -> Decimal:
+    value = params.get(key, str(default))
+    if isinstance(value, bool):
+        raise SimulationConfigError(f"Config friction.{key} must be a decimal number or string.")
+    if isinstance(value, (int, float)):
+        value = str(value)
+    if not isinstance(value, str):
+        raise SimulationConfigError(f"Config friction.{key} must be a decimal number or string.")
+    parsed = audit._parse_decimal(value)
+    if parsed is None:
+        raise SimulationConfigError(f"Config friction.{key} must be finite.")
+    return parsed
+
+
+def _realized_pnl_for_sell(fill: Fill, lots: list[dict[str, Decimal]]) -> Decimal | None:
+    remaining = fill.quantity
+    realized = ZERO
+    exit_cost = fill.fee + fill.slippage
+    while remaining > 0 and lots:
+        lot = lots[0]
+        lot_quantity = lot["quantity"]
+        matched = min(remaining, lot_quantity)
+        buy_cost = _allocated_cost(lot["cost"], lot_quantity, matched)
+        sell_cost = _allocated_cost(exit_cost, fill.quantity, matched)
+        realized += (fill.price - lot["price"]) * matched - buy_cost - sell_cost
+        remaining -= matched
+        lot["quantity"] = lot_quantity - matched
+        lot["cost"] -= buy_cost
+        if lot["quantity"] == 0:
+            lots.pop(0)
+    if remaining > 0:
+        return None
+    return realized
+
+
+def _allocated_cost(total_cost: Decimal, total_quantity: Decimal, matched_quantity: Decimal) -> Decimal:
+    if total_quantity == 0:
+        return ZERO
+    return total_cost * matched_quantity / total_quantity
+
+
+def _result_fee_rate(result: SimulationResult) -> Decimal:
+    return result.friction.fee_rate
+
+
+def _result_slippage_per_trade(result: SimulationResult) -> Decimal:
+    return result.friction.slippage_per_trade
+
+
+def _fee_assumption(result: SimulationResult) -> str:
+    if result.friction.fee_rate == 0:
+        return "zero fee"
+    return "configured fee rate"
+
+
+def _slippage_assumption(result: SimulationResult) -> str:
+    if result.friction.slippage_per_trade == 0:
+        return "zero slippage"
+    return "configured fixed slippage per fill"
 
 
 def _int_param(params: dict[str, object], key: str, default: int) -> int:

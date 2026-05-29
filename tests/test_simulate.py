@@ -168,6 +168,8 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(Decimal("1000"), config.initial_cash)
         self.assertEqual("BuyAndHold", config.strategy_name)
         self.assertEqual({"quantity": "1"}, config.strategy_params)
+        self.assertEqual(Decimal("0.0005"), config.friction.fee_rate)
+        self.assertEqual(Decimal("0.01"), config.friction.slippage_per_trade)
 
     def test_create_buy_and_hold_strategy_from_registry(self) -> None:
         strategy = simulate.create_strategy("BuyAndHold", {"quantity": "2"})
@@ -212,14 +214,31 @@ class SimulationTests(unittest.TestCase):
     def test_run_simulation_accepts_configured_strategy(self) -> None:
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
         strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
-        result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy)
+        result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy, config.friction)
         self.assertEqual(simulate.PASS, result.status)
         self.assertEqual("BuyAndHold", result.strategy_name)
         self.assertEqual(1, result.order_count)
         self.assertEqual(1, result.fill_count)
-        self.assertEqual(Decimal("900"), result.final_cash)
+        self.assertEqual(Decimal("899.94"), result.final_cash)
         self.assertEqual({"SIM": Decimal("1")}, result.final_positions)
-        self.assertEqual(Decimal("1001"), result.final_equity)
+        self.assertEqual(Decimal("1000.94"), result.final_equity)
+        self.assertEqual(Decimal("0.05"), result.total_fees)
+        self.assertEqual(Decimal("0.01"), result.total_slippage)
+        self.assertEqual(Decimal("0.05"), result.fills[0].fee)
+        self.assertEqual(Decimal("0.01"), result.fills[0].slippage)
+
+    def test_default_zero_friction_preserves_legacy_behavior(self) -> None:
+        result = simulate.run_simulation(FIXTURES / "valid_complete")
+        self.assertEqual(Decimal("100001"), result.final_cash)
+        self.assertEqual(Decimal("0"), result.total_fees)
+        self.assertEqual(Decimal("0"), result.total_slippage)
+
+    def test_insufficient_cash_includes_friction(self) -> None:
+        strategy = simulate.create_strategy("BuyAndHold", {"quantity": "1"})
+        friction = simulate.FrictionModel(fee_rate=Decimal("0.0005"), slippage_per_trade=Decimal("0.01"))
+        result = simulate.run_simulation(FIXTURES / "valid_complete", Decimal("100.05"), strategy, friction)
+        self.assertEqual(simulate.FAIL, result.status)
+        self.assertIn("Insufficient cash", result.error or "")
 
 
 class SimulationCliTests(unittest.TestCase):
@@ -283,7 +302,7 @@ class SimulationCliTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode)
         self.assertIn("STRATEGY: BuyAndHold", completed.stdout)
         self.assertIn("INITIAL CASH: 1000", completed.stdout)
-        self.assertIn("FINAL CASH: 900", completed.stdout)
+        self.assertIn("FINAL CASH: 899.9400", completed.stdout)
         self.assertIn("FINAL POSITIONS: SIM:1", completed.stdout)
 
     def test_cli_config_export_validates(self) -> None:
@@ -366,6 +385,28 @@ class SimulationExportTests(unittest.TestCase):
             self.assertEqual(2, account_summary["order_count"])
             self.assertEqual(2, account_summary["fill_count"])
             self.assertEqual(2, account_summary["trade_count"])
+            self.assertEqual("0", account_summary["total_fees"])
+            self.assertEqual("0", account_summary["total_slippage"])
+
+    def test_export_records_configured_friction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export_dir = Path(tmp) / "run"
+            config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
+            strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+            result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy, config.friction)
+            simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="mvp5-test")
+            account_summary = json.loads((export_dir / "account_summary.json").read_text(encoding="utf-8"))
+            manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            fills = (export_dir / "fills.csv").read_text(encoding="utf-8").splitlines()
+            trades = (export_dir / "trades.csv").read_text(encoding="utf-8").splitlines()
+
+            self.assertEqual("899.9400", account_summary["final_cash"])
+            self.assertEqual("1000.9400", account_summary["final_equity"])
+            self.assertEqual("0.0500", account_summary["total_fees"])
+            self.assertEqual("0.01", account_summary["total_slippage"])
+            self.assertEqual({"fee_rate": "0.0005", "slippage_per_trade": "0.01", "total_fees": "0.0500", "total_slippage": "0.01"}, manifest["friction"])
+            self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,1,100,0.0500,0.01", fills)
+            self.assertIn("2026-01-01T09:30:00,T000001,market_follow,buy,1,100,0.0600,,SIM,BuyAndHold,market_follow,O000001,F000001", trades)
 
     def test_orders_and_fills_contain_expected_buy_and_sell_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -112,11 +112,13 @@ def validate_run_artifacts(run_artifact_dir: Path | str) -> RunValidationResult:
 
     _validate_manifest(manifest, account_summary, errors)
     _validate_order_fill_consistency(orders, fills, errors)
+    _validate_fill_costs(fills, errors)
     replay_cash, replay_positions = _replay_account(account_summary, fills, errors)
     replay_equity = _validate_equity(equity_curve, account_summary, replay_cash, replay_positions, errors)
     _validate_trades_to_fills(trades, fills, errors)
     _validate_audit_summary(audit_summary, errors, gaps_or_limitations)
     _validate_counts(account_summary, orders, fills, trades, errors)
+    _validate_cost_totals(account_summary, fills, errors)
 
     return RunValidationResult(
         status=PASS if not errors else FAIL,
@@ -325,6 +327,14 @@ def _validate_order_fill_consistency(orders: list[OrderArtifact], fills: list[Fi
             errors.append(f"orders.csv order_id {order.order_id} is filled but has no fill.")
 
 
+def _validate_fill_costs(fills: list[FillArtifact], errors: list[str]) -> None:
+    for fill in fills:
+        if fill.fee < 0:
+            errors.append(f"fills.csv fill_id {fill.fill_id} has negative fee.")
+        if fill.slippage < 0:
+            errors.append(f"fills.csv fill_id {fill.fill_id} has negative slippage.")
+
+
 def _replay_account(
     account_summary: dict[str, Any],
     fills: list[FillArtifact],
@@ -470,6 +480,17 @@ def _validate_counts(
         errors.append("account_summary.json trade_count does not match trades.csv row count.")
 
 
+def _validate_cost_totals(account_summary: dict[str, Any], fills: list[FillArtifact], errors: list[str]) -> None:
+    expected_total_fees = _parse_optional_summary_decimal(account_summary, "total_fees", errors)
+    expected_total_slippage = _parse_optional_summary_decimal(account_summary, "total_slippage", errors)
+    actual_total_fees = sum((fill.fee for fill in fills), Decimal("0"))
+    actual_total_slippage = sum((fill.slippage for fill in fills), Decimal("0"))
+    if expected_total_fees is not None and expected_total_fees != actual_total_fees:
+        errors.append("account_summary.json total_fees does not match fills.csv fee total.")
+    if expected_total_slippage is not None and expected_total_slippage != actual_total_slippage:
+        errors.append("account_summary.json total_slippage does not match fills.csv slippage total.")
+
+
 def _require_columns(file_name: str, row: dict[str, str], required: list[str]) -> None:
     missing = [column for column in required if column not in row]
     if missing:
@@ -514,6 +535,12 @@ def _parse_summary_decimal(account_summary: dict[str, Any], key: str, errors: li
         errors.append(f"account_summary.json {key} is not a finite decimal.")
         return None
     return parsed
+
+
+def _parse_optional_summary_decimal(account_summary: dict[str, Any], key: str, errors: list[str]) -> Decimal | None:
+    if key not in account_summary:
+        return None
+    return _parse_summary_decimal(account_summary, key, errors)
 
 
 def _parse_summary_int(account_summary: dict[str, Any], key: str, errors: list[str]) -> int | None:
