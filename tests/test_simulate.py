@@ -160,6 +160,67 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(Decimal("1000"), override_result.initial_cash)
         self.assertEqual(Decimal("1001"), override_result.final_cash)
 
+    def test_strategy_registry_exposes_configured_strategies(self) -> None:
+        self.assertEqual({"BuyAndHold", "MovingAverageCross"}, set(simulate.STRATEGY_REGISTRY))
+
+    def test_load_simulation_config_parses_sample_config(self) -> None:
+        config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
+        self.assertEqual(Decimal("1000"), config.initial_cash)
+        self.assertEqual("BuyAndHold", config.strategy_name)
+        self.assertEqual({"quantity": "1"}, config.strategy_params)
+
+    def test_create_buy_and_hold_strategy_from_registry(self) -> None:
+        strategy = simulate.create_strategy("BuyAndHold", {"quantity": "2"})
+        self.assertEqual("BuyAndHold", strategy.name)
+        event = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-01T09:30:00", "datetime"),
+            symbol="SIM",
+            price=Decimal("100"),
+        )
+        orders = strategy.on_data(event, simulate.AccountState(cash=Decimal("1000"), positions={}))
+        self.assertEqual(1, len(orders))
+        self.assertEqual(Decimal("2"), orders[0].quantity)
+        self.assertEqual([], strategy.on_data(event, simulate.AccountState(cash=Decimal("1000"), positions={})))
+
+    def test_moving_average_cross_generates_deterministic_orders(self) -> None:
+        strategy = simulate.create_strategy(
+            "MovingAverageCross",
+            {"short_window": 1, "long_window": 2, "quantity": "1"},
+        )
+        first = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-01T09:30:00", "datetime"),
+            symbol="SIM",
+            price=Decimal("100"),
+        )
+        second = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-02T09:30:00", "datetime"),
+            symbol="SIM",
+            price=Decimal("101"),
+        )
+        third = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-03T09:30:00", "datetime"),
+            symbol="SIM",
+            price=Decimal("99"),
+        )
+        self.assertEqual([], strategy.on_data(first, simulate.AccountState(cash=Decimal("1000"), positions={})))
+        buy_orders = strategy.on_data(second, simulate.AccountState(cash=Decimal("1000"), positions={}))
+        self.assertEqual("buy", buy_orders[0].side)
+        sell_orders = strategy.on_data(third, simulate.AccountState(cash=Decimal("899"), positions={"SIM": Decimal("1")}))
+        self.assertEqual("sell", sell_orders[0].side)
+        self.assertEqual(Decimal("1"), sell_orders[0].quantity)
+
+    def test_run_simulation_accepts_configured_strategy(self) -> None:
+        config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
+        strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+        result = simulate.run_simulation(FIXTURES / "valid_complete", config.initial_cash, strategy)
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual("BuyAndHold", result.strategy_name)
+        self.assertEqual(1, result.order_count)
+        self.assertEqual(1, result.fill_count)
+        self.assertEqual(Decimal("900"), result.final_cash)
+        self.assertEqual({"SIM": Decimal("1")}, result.final_positions)
+        self.assertEqual(Decimal("1001"), result.final_equity)
+
 
 class SimulationCliTests(unittest.TestCase):
     def test_cli_output_contains_key_deterministic_lines(self) -> None:
@@ -202,6 +263,63 @@ class SimulationCliTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode)
         self.assertIn("INITIAL CASH: 1000", completed.stdout)
         self.assertIn("FINAL CASH: 1001", completed.stdout)
+
+    def test_cli_config_driven_run(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "system_trading_s3.simulate",
+                str(FIXTURES / "valid_complete"),
+                "--config",
+                str(FIXTURES / "sample_config.json"),
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode)
+        self.assertIn("STRATEGY: BuyAndHold", completed.stdout)
+        self.assertIn("INITIAL CASH: 1000", completed.stdout)
+        self.assertIn("FINAL CASH: 900", completed.stdout)
+        self.assertIn("FINAL POSITIONS: SIM:1", completed.stdout)
+
+    def test_cli_config_export_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export_dir = Path(tmp) / "mvp4"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "system_trading_s3.simulate",
+                    str(FIXTURES / "valid_complete"),
+                    "--config",
+                    str(FIXTURES / "sample_config.json"),
+                    "--export-dir",
+                    str(export_dir),
+                    "--run-id",
+                    "mvp4-test",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(0, completed.returncode)
+            validation = subprocess.run(
+                [sys.executable, "-m", "system_trading_s3.validate_run", str(export_dir)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        self.assertEqual(0, validation.returncode)
+        self.assertIn("VALIDATION STATUS: PASS", validation.stdout)
+        self.assertIn("STRATEGY: BuyAndHold", validation.stdout)
 
 
 class SimulationExportTests(unittest.TestCase):

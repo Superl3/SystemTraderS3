@@ -50,6 +50,7 @@ MVP1 simulate:
 
 ```powershell
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json
 ```
 
 MVP2 export:
@@ -96,7 +97,9 @@ Completed MVP2: deterministic run artifact export.
 
 Completed MVP3: run artifact replay and baseline accounting validation.
 
-Candidate MVP4: small run-artifact reader/report or validation hardening that improves operator trust without adding strategy complexity.
+Completed MVP4: config-driven execution with a static strategy registry.
+
+Candidate MVP5: small strategy/config documentation and run examples, or a very narrow friction model that preserves existing artifact validation.
 
 Later phase: richer metrics.
 
@@ -115,7 +118,8 @@ Later phase: small-capital live validation criteria only.
 ## Current Limitations
 
 - One symbol only.
-- One hard-coded strategy: buy one unit at the first price and sell the held quantity at the final price.
+- Default no-config behavior still uses the legacy `buy_and_hold_one_unit` strategy.
+- Config-driven runs support only `BuyAndHold` and `MovingAverageCross`.
 - Immediate fills only.
 - Zero fee and zero slippage.
 - No partial fills.

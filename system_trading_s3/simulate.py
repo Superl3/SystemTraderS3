@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Protocol
 
 from system_trading_s3 import audit
 
@@ -48,6 +48,10 @@ class SimulationExportError(Exception):
     """Raised when deterministic run artifacts cannot be exported."""
 
 
+class SimulationConfigError(Exception):
+    """Raised when a simulation config file is invalid."""
+
+
 @dataclass(frozen=True)
 class MarketPriceEvent:
     timestamp: datetime
@@ -61,6 +65,19 @@ class Order:
     symbol: str
     quantity: Decimal
     price: Decimal
+
+
+@dataclass(frozen=True)
+class MarketState:
+    timestamp: datetime
+    symbol: str
+    price: Decimal
+
+
+@dataclass(frozen=True)
+class AccountState:
+    cash: Decimal
+    positions: dict[str, Decimal]
 
 
 @dataclass(frozen=True)
@@ -109,6 +126,23 @@ class SimulationResult:
     orders: list[OrderRecord]
     equity_curve: list[AccountSnapshot]
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class SimulationConfig:
+    initial_cash: Decimal
+    strategy_name: str
+    strategy_params: dict[str, object]
+
+
+class Strategy(Protocol):
+    name: str
+
+    def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
+        ...
+
+    def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
+        ...
 
 
 class DataFeed:
@@ -223,6 +257,11 @@ class BuyAndHoldOneUnitStrategy:
         self._bought = True
         return [Order(side="buy", symbol=event.symbol, quantity=ONE_UNIT, price=event.price)]
 
+    def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
+        del account_state
+        event = MarketPriceEvent(timestamp=market_state.timestamp, symbol=market_state.symbol, price=market_state.price)
+        return self.on_event(event, SimulatedAccount(Decimal("0")))
+
     def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
         held_quantity = account.positions.get(final_event.symbol, Decimal("0"))
         if held_quantity <= 0:
@@ -230,12 +269,74 @@ class BuyAndHoldOneUnitStrategy:
         return [Order(side="sell", symbol=final_event.symbol, quantity=held_quantity, price=final_event.price)]
 
 
+class BuyAndHoldStrategy:
+    name = "BuyAndHold"
+
+    def __init__(self, quantity: Decimal = ONE_UNIT) -> None:
+        if quantity <= 0:
+            raise SimulationConfigError("BuyAndHold quantity must be positive.")
+        self.quantity = quantity
+        self._bought = False
+
+    def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
+        del account_state
+        if self._bought:
+            return []
+        self._bought = True
+        return [Order(side="buy", symbol=market_state.symbol, quantity=self.quantity, price=market_state.price)]
+
+    def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
+        del final_event, account
+        return []
+
+
+class MovingAverageCrossStrategy:
+    name = "MovingAverageCross"
+
+    def __init__(self, short_window: int = 2, long_window: int = 3, quantity: Decimal = ONE_UNIT) -> None:
+        if short_window <= 0:
+            raise SimulationConfigError("MovingAverageCross short_window must be positive.")
+        if long_window <= short_window:
+            raise SimulationConfigError("MovingAverageCross long_window must be greater than short_window.")
+        if quantity <= 0:
+            raise SimulationConfigError("MovingAverageCross quantity must be positive.")
+        self.short_window = short_window
+        self.long_window = long_window
+        self.quantity = quantity
+        self._prices: list[Decimal] = []
+
+    def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
+        self._prices.append(market_state.price)
+        if len(self._prices) < self.long_window:
+            return []
+
+        short_avg = sum(self._prices[-self.short_window:]) / Decimal(self.short_window)
+        long_avg = sum(self._prices[-self.long_window:]) / Decimal(self.long_window)
+        held_quantity = account_state.positions.get(market_state.symbol, Decimal("0"))
+
+        if short_avg > long_avg and held_quantity <= 0:
+            return [Order(side="buy", symbol=market_state.symbol, quantity=self.quantity, price=market_state.price)]
+        if short_avg < long_avg and held_quantity > 0:
+            return [Order(side="sell", symbol=market_state.symbol, quantity=held_quantity, price=market_state.price)]
+        return []
+
+    def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
+        del final_event, account
+        return []
+
+
+STRATEGY_REGISTRY = {
+    BuyAndHoldStrategy.name: BuyAndHoldStrategy,
+    MovingAverageCrossStrategy.name: MovingAverageCrossStrategy,
+}
+
+
 class SimulationEngine:
     def __init__(
         self,
         feed: DataFeed,
         account: SimulatedAccount,
-        strategy: BuyAndHoldOneUnitStrategy,
+        strategy: Strategy,
         execution: ExecutionSimulator,
     ) -> None:
         self.feed = feed
@@ -254,7 +355,7 @@ class SimulationEngine:
 
         for event in events:
             self.last_prices[event.symbol] = event.price
-            self._execute_orders(event, self.strategy.on_event(event, self.account))
+            self._execute_orders(event, self.strategy.on_data(_market_state(event), _account_state(self.account)))
             if event == final_event:
                 self._execute_orders(final_event, self.strategy.on_finish(final_event, self.account))
             self._record_account_snapshot(event)
@@ -285,22 +386,26 @@ class SimulationEngine:
         )
 
 
-def run_simulation(dataset_dir: Path | str, initial_cash: Decimal = DEFAULT_INITIAL_CASH) -> SimulationResult:
+def run_simulation(
+    dataset_dir: Path | str,
+    initial_cash: Decimal = DEFAULT_INITIAL_CASH,
+    strategy: Strategy | None = None,
+) -> SimulationResult:
     dataset_path = Path(dataset_dir)
     audit_status = _audit_status_for_context(dataset_path)
 
     try:
         feed = DataFeed.from_dataset(dataset_path)
         account = SimulatedAccount(initial_cash)
-        strategy = BuyAndHoldOneUnitStrategy()
-        engine = SimulationEngine(feed, account, strategy, ExecutionSimulator())
+        selected_strategy = strategy if strategy is not None else BuyAndHoldOneUnitStrategy()
+        engine = SimulationEngine(feed, account, selected_strategy, ExecutionSimulator())
         engine.run()
         final_equity = account.final_equity(engine.last_prices)
         return SimulationResult(
             status=PASS,
             dataset=str(dataset_path),
             audit_status=audit_status,
-            strategy_name=strategy.name,
+            strategy_name=selected_strategy.name,
             initial_cash=initial_cash,
             final_cash=account.cash,
             final_positions=dict(sorted(account.positions.items())),
@@ -360,6 +465,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--export-dir", type=Path, help="Write deterministic run artifacts to this directory.")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing non-empty export directory.")
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID, help="Deterministic run identifier for exported artifacts.")
+    parser.add_argument("--config", type=Path, help="JSON run config with initial_cash, strategy_name, and strategy_params.")
     args = parser.parse_args(argv)
 
     if not args.dataset_dir.exists() or not args.dataset_dir.is_dir():
@@ -367,7 +473,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        result = run_simulation(args.dataset_dir, args.initial_cash)
+        config = load_simulation_config(args.config) if args.config is not None else None
+        selected_initial_cash = config.initial_cash if config is not None else args.initial_cash
+        selected_strategy = create_strategy(config.strategy_name, config.strategy_params) if config is not None else None
+        result = run_simulation(args.dataset_dir, selected_initial_cash, selected_strategy)
+    except SimulationConfigError as exc:
+        print(f"CONFIG ERROR: {exc}", file=sys.stderr)
+        return 2
     except Exception as exc:  # pragma: no cover - defensive CLI boundary.
         print(f"Internal error: {exc}", file=sys.stderr)
         return 2
@@ -419,6 +531,51 @@ def export_run_artifacts(
         if isinstance(exc, SimulationExportError):
             raise
         raise SimulationExportError(str(exc)) from exc
+
+
+def load_simulation_config(path: Path | str) -> SimulationConfig:
+    config_path = Path(path)
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SimulationConfigError(f"Could not read config JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise SimulationConfigError("Config must be a JSON object.")
+
+    initial_cash_value = payload.get("initial_cash")
+    strategy_name = payload.get("strategy_name")
+    strategy_params = payload.get("strategy_params")
+
+    if not isinstance(initial_cash_value, str):
+        raise SimulationConfigError("Config initial_cash must be a decimal string.")
+    initial_cash = audit._parse_decimal(initial_cash_value)
+    if initial_cash is None or initial_cash < 0:
+        raise SimulationConfigError("Config initial_cash must be a finite nonnegative decimal.")
+    if not isinstance(strategy_name, str) or not strategy_name.strip():
+        raise SimulationConfigError("Config strategy_name must be a non-empty string.")
+    if not isinstance(strategy_params, dict):
+        raise SimulationConfigError("Config strategy_params must be an object.")
+    return SimulationConfig(initial_cash=initial_cash, strategy_name=strategy_name.strip(), strategy_params=strategy_params)
+
+
+def create_strategy(strategy_name: str, strategy_params: dict[str, object]) -> Strategy:
+    strategy_class = STRATEGY_REGISTRY.get(strategy_name)
+    if strategy_class is None:
+        available = ", ".join(sorted(STRATEGY_REGISTRY))
+        raise SimulationConfigError(f"Unknown strategy_name {strategy_name!r}. Available strategies: {available}.")
+
+    if strategy_class is BuyAndHoldStrategy:
+        quantity = _decimal_param(strategy_params, "quantity", ONE_UNIT)
+        return BuyAndHoldStrategy(quantity=quantity)
+    if strategy_class is MovingAverageCrossStrategy:
+        short_window = _int_param(strategy_params, "short_window", 2)
+        long_window = _int_param(strategy_params, "long_window", 3)
+        quantity = _decimal_param(strategy_params, "quantity", ONE_UNIT)
+        return MovingAverageCrossStrategy(short_window=short_window, long_window=long_window, quantity=quantity)
+
+    raise SimulationConfigError(f"Strategy {strategy_name!r} is registered but cannot be constructed.")
 
 
 def _read_market_prices(path: Path) -> list[MarketPriceEvent]:
@@ -495,7 +652,7 @@ def _manifest_payload(result: SimulationResult, dataset_dir: Path, run_id: str) 
             "zero fee",
             "zero slippage",
             "one symbol only",
-            "one hard-coded buy/hold/sell strategy",
+            "one deterministic strategy selected from a static registry or default legacy strategy",
         ],
         "generated_at_policy": "omitted_for_determinism",
     }
@@ -633,6 +790,33 @@ def _write_csv(path: Path, headers: list[str], rows: list[list[str]]) -> None:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(headers)
         writer.writerows(rows)
+
+
+def _market_state(event: MarketPriceEvent) -> MarketState:
+    return MarketState(timestamp=event.timestamp, symbol=event.symbol, price=event.price)
+
+
+def _account_state(account: SimulatedAccount) -> AccountState:
+    return AccountState(cash=account.cash, positions=dict(sorted(account.positions.items())))
+
+
+def _decimal_param(params: dict[str, object], key: str, default: Decimal) -> Decimal:
+    value = params.get(key, str(default))
+    if isinstance(value, int):
+        value = str(value)
+    if not isinstance(value, str):
+        raise SimulationConfigError(f"Strategy parameter {key} must be a decimal string.")
+    parsed = audit._parse_decimal(value)
+    if parsed is None:
+        raise SimulationConfigError(f"Strategy parameter {key} must be a finite decimal.")
+    return parsed
+
+
+def _int_param(params: dict[str, object], key: str, default: int) -> int:
+    value = params.get(key, default)
+    if not isinstance(value, int):
+        raise SimulationConfigError(f"Strategy parameter {key} must be an integer.")
+    return value
 
 
 def _audit_status_for_context(dataset_path: Path) -> str:

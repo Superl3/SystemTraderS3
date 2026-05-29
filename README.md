@@ -5,7 +5,7 @@ SystemTradingS3 is a simulated trading systems skeleton. It is not an alpha-disc
 The current baseline has three CLI layers:
 
 1. `audit`: read-only structural audit for generated or provided simulation datasets.
-2. `simulate`: thin paper-trading loop using simulated market prices.
+2. `simulate`: config-driven paper-trading loop using simulated market prices.
 3. `validate_run`: replay validation for exported simulation run artifacts.
 
 The long-term thesis is that strategies are presets running on common base rules. A future system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before richer metrics, strategy selection, risk rules, or live integration.
@@ -22,9 +22,12 @@ rtk python -m system_trading_s3.audit --strict tests/fixtures/valid_minimal
 # MVP1: run the thin paper-trading loop without writing artifacts
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
 
+# MVP4: run a configured strategy
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json
+
 # MVP2: export deterministic run artifacts
 $run = "$env:TEMP\systemtraders3-docs-smoke"
-rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --export-dir $run --run-id docs-smoke --overwrite
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json --export-dir $run --run-id docs-smoke --overwrite
 
 # MVP2 self-check and MVP3 replay validation
 rtk python -m system_trading_s3.audit $run
@@ -39,7 +42,7 @@ All commands are local and simulated. `audit` and `validate_run` are read-only. 
 - MVP1 completed: one-symbol simulated paper-trading loop with a trivial buy/hold/sell strategy.
 - MVP2 completed: deterministic run artifact export.
 - MVP3 completed: run artifact replay and baseline accounting validation.
-- MVP4 is not implemented.
+- MVP4 completed: config-driven strategy selection from a static registry.
 
 ## MVP Responsibilities
 
@@ -52,9 +55,16 @@ MVP0 audit:
 MVP1 simulate:
 
 - reads `market_prices.csv` as the true simulation input;
-- runs one built-in strategy, `buy_and_hold_one_unit`;
+- preserves the default legacy `buy_and_hold_one_unit` behavior when no config is provided;
 - uses `decimal.Decimal` accounting;
 - prints final account state without exporting files unless requested.
+
+MVP4 config-driven execution:
+
+- accepts `--config <json>`;
+- reads `initial_cash`, `strategy_name`, and `strategy_params`;
+- supports a static registry with `BuyAndHold` and `MovingAverageCross`;
+- keeps strategies as order-intent generators while the engine owns account mutation.
 
 MVP2 export:
 

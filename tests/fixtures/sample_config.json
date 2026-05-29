@@ -1,0 +1,7 @@
+{
+  "initial_cash": "1000",
+  "strategy_name": "BuyAndHold",
+  "strategy_params": {
+    "quantity": "1"
+  }
+}
