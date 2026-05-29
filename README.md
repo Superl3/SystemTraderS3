@@ -26,6 +26,9 @@ rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
 # MVP4: run a configured strategy
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json
 
+# MVP7: run a multi-symbol portfolio fixture
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json
+
 # MVP2: export deterministic run artifacts
 $run = "$env:TEMP\systemtraders3-docs-smoke"
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json --export-dir $run --run-id docs-smoke --overwrite
@@ -49,6 +52,7 @@ All commands are local and simulated. `audit` and `validate_run` are read-only. 
 - MVP4 completed: config-driven strategy selection from a static registry.
 - MVP5 completed: deterministic transaction friction and post-run baseline metrics.
 - MVP6 completed: engine-integrated benchmark logging and benchmark-relative metrics.
+- MVP7 completed: multi-symbol market ingestion and portfolio state accounting.
 
 ## MVP Responsibilities
 
@@ -60,7 +64,8 @@ MVP0 audit:
 
 MVP1 simulate:
 
-- reads `market_prices.csv` as the true simulation input;
+- reads `market_prices.csv`, or sorted `*_prices.csv` files, as the true simulation input;
+- forward-fills prices onto synchronized market timestamps and passes strategies a `{symbol: price}` market state;
 - preserves the default legacy `buy_and_hold_one_unit` behavior when no config is provided;
 - uses `decimal.Decimal` accounting;
 - prints final account state without exporting files unless requested.
@@ -80,6 +85,7 @@ MVP2 export:
 - does not fabricate benchmark or factor files;
 - records optional audit gaps as gaps, not failures.
 - records optional `benchmark_price` and `benchmark_equity` columns in `equity_curve.csv` when `benchmark_prices.csv` is available.
+- records portfolio `last_prices` and `position_quantities` in `equity_curve.csv` for multi-symbol replay validation.
 
 MVP3 validate_run:
 
@@ -118,7 +124,7 @@ Optional:
 - `benchmark.csv`
 - `factor_exposure.csv`
 
-MVP1+ simulation also accepts optional `benchmark_prices.csv` with `timestamp,symbol,price`. The simulator forward-fills benchmark prices onto market timestamps and normalizes benchmark equity from the same initial cash.
+MVP1+ simulation accepts either normalized `market_prices.csv` or multiple sorted `*_prices.csv` files, each using `timestamp,symbol,price`. MVP6+ also accepts optional `benchmark_prices.csv`; the simulator forward-fills benchmark prices onto market timestamps and normalizes benchmark equity from the same initial cash.
 
 CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are accepted. Header whitespace is trimmed, header names remain case-sensitive, unknown extra columns are allowed, and blank required cells are treated as missing rather than zero.
 
@@ -133,6 +139,7 @@ CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are a
 - No dashboard.
 - No factor-relative metrics yet.
 - No richer risk-adjusted metrics such as Sortino, capture, or turnover yet.
+- No per-symbol metrics yet; metrics evaluate portfolio-level equity only.
 - No claim that any strategy is profitable.
 
 See `schemas/` for the exact contracts and `docs/mvp-foundation.md` for the staged roadmap and limitations.

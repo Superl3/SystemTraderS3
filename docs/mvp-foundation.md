@@ -71,7 +71,7 @@ MVP5/MVP6 metrics:
 rtk python -m system_trading_s3.metrics <run_dir>
 ```
 
-`market_prices.csv` is the true simulation input for MVP1+. Optional `benchmark_prices.csv` is read by the simulation engine, forward-filled onto market timestamps, and exported as normalized benchmark equity. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
+`market_prices.csv` or sorted `*_prices.csv` files are the true simulation inputs for MVP1+. Optional `benchmark_prices.csv` is read by the simulation engine, forward-filled onto market timestamps, and exported as normalized benchmark equity. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
 
 ## CSV Policy
 
@@ -109,7 +109,9 @@ Completed MVP5: deterministic transaction friction and post-run baseline metrics
 
 Completed MVP6: engine-integrated benchmark logging and benchmark-relative metrics.
 
-Candidate MVP7: factor exposure inputs and factor-relative metrics using explicit target series.
+Completed MVP7: multi-symbol market ingestion and portfolio state accounting.
+
+Candidate MVP8: factor exposure inputs and factor-relative metrics using explicit target series.
 
 Later phase: richer risk-adjusted metrics.
 
@@ -125,9 +127,9 @@ Later phase: small-capital live validation criteria only.
 
 ## Current Limitations
 
-- One symbol only.
 - Default no-config behavior still uses the legacy `buy_and_hold_one_unit` strategy.
 - Config-driven runs support only `BuyAndHold` and `MovingAverageCross`.
+- Strategy behavior is portfolio-capable but still simple: current built-ins either act across available symbols or use an optional `target_symbol`.
 - Immediate fills only.
 - Friction is deterministic only: percentage fee plus fixed slippage per fill.
 - Benchmark synchronization is deterministic forward-fill only.
@@ -136,6 +138,7 @@ Later phase: small-capital live validation criteria only.
 - No risk budget, sizing model, exposure limits, cooldown, or kill switch.
 - No generated factor exposure data.
 - Performance metrics are still narrow: total return, row-interval CAGR, max drawdown, realized-PnL win rate, profit factor, trade counts, alpha, beta, Sharpe ratio, tracking error, and information ratio.
+- Metrics evaluate portfolio-level equity only, not per-symbol attribution.
 - No factor-relative analysis yet.
 - No live trading, broker integration, dashboard, optimization, or ML.
 

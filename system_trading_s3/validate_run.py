@@ -58,6 +58,8 @@ class EquityArtifact:
     symbol: str
     position_quantity: Decimal
     last_price: Decimal
+    last_prices: dict[str, Decimal]
+    position_quantities: dict[str, Decimal]
 
 
 @dataclass(frozen=True)
@@ -266,6 +268,13 @@ def _load_equity_curve(path: Path) -> list[EquityArtifact]:
                 symbol=_required_text(path.name, index, row, "symbol"),
                 position_quantity=_parse_decimal(path.name, index, "position_quantity", row["position_quantity"]),
                 last_price=_parse_decimal(path.name, index, "last_price", row["last_price"]),
+                last_prices=_parse_optional_decimal_mapping(path.name, index, "last_prices", row.get("last_prices")),
+                position_quantities=_parse_optional_decimal_mapping(
+                    path.name,
+                    index,
+                    "position_quantities",
+                    row.get("position_quantities"),
+                ),
             )
         )
     if not equity_rows:
@@ -391,17 +400,38 @@ def _validate_equity(
     if final_row.equity != row_equity:
         errors.append("Final equity_curve.csv equity does not equal cash plus position_value.")
 
-    if final_row.position_value != final_row.position_quantity * final_row.last_price:
+    if final_row.last_prices or final_row.position_quantities:
+        calculated_position_value = sum(
+            (
+                quantity * final_row.last_prices[symbol]
+                for symbol, quantity in final_row.position_quantities.items()
+                if symbol in final_row.last_prices
+            ),
+            Decimal("0"),
+        )
+        missing_prices = sorted(symbol for symbol in final_row.position_quantities if symbol not in final_row.last_prices)
+        if missing_prices:
+            errors.append(f"Final equity_curve.csv missing prices for position symbols: {', '.join(missing_prices)}.")
+        if final_row.position_value != calculated_position_value:
+            errors.append("Final equity_curve.csv position_value does not equal aggregate position quantities times last prices.")
+    elif final_row.position_value != final_row.position_quantity * final_row.last_price:
         errors.append("Final equity_curve.csv position_value does not equal position_quantity times last_price.")
 
     replayed_equity: Decimal | None = None
     if replay_cash is not None:
         replayed_equity = replay_cash
-        for symbol, quantity in sorted(replay_positions.items()):
-            if symbol != final_row.symbol:
-                errors.append(f"No final equity_curve.csv price for replayed position symbol {symbol}.")
-                continue
-            replayed_equity += quantity * final_row.last_price
+        if final_row.last_prices:
+            for symbol, quantity in sorted(replay_positions.items()):
+                if symbol not in final_row.last_prices:
+                    errors.append(f"No final equity_curve.csv price for replayed position symbol {symbol}.")
+                    continue
+                replayed_equity += quantity * final_row.last_prices[symbol]
+        else:
+            for symbol, quantity in sorted(replay_positions.items()):
+                if symbol != final_row.symbol:
+                    errors.append(f"No final equity_curve.csv price for replayed position symbol {symbol}.")
+                    continue
+                replayed_equity += quantity * final_row.last_price
         if expected_final_equity is not None and replayed_equity != expected_final_equity:
             errors.append("Replayed final equity does not match account_summary.json final_equity.")
     return replayed_equity
@@ -523,6 +553,27 @@ def _parse_decimal(file_name: str, row_number: int, column: str, value: str) -> 
     if parsed is None:
         raise RunValidationError(f"{file_name} row {row_number} has invalid decimal {column}.")
     return parsed
+
+
+def _parse_optional_decimal_mapping(file_name: str, row_number: int, column: str, value: str | None) -> dict[str, Decimal]:
+    if value is None or audit._is_blank(value):
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise RunValidationError(f"{file_name} row {row_number} has invalid JSON {column}.") from exc
+    if not isinstance(payload, dict):
+        raise RunValidationError(f"{file_name} row {row_number} {column} must be a JSON object.")
+    parsed: dict[str, Decimal] = {}
+    for symbol, raw_decimal in payload.items():
+        if not isinstance(symbol, str) or not isinstance(raw_decimal, str):
+            raise RunValidationError(f"{file_name} row {row_number} {column} must map symbols to decimal strings.")
+        decimal_value = audit._parse_decimal(raw_decimal)
+        if decimal_value is None:
+            raise RunValidationError(f"{file_name} row {row_number} {column} has invalid decimal for {symbol}.")
+        if decimal_value != 0:
+            parsed[symbol] = decimal_value
+    return dict(sorted(parsed.items()))
 
 
 def _parse_summary_decimal(account_summary: dict[str, Any], key: str, errors: list[str]) -> Decimal | None:

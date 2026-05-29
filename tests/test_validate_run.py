@@ -40,6 +40,21 @@ def export_friction_run(root: Path, run_id: str = "mvp5-test") -> Path:
     return export_dir
 
 
+def export_multisymbol_run(root: Path, run_id: str = "mvp7-test") -> Path:
+    export_dir = root / "run"
+    config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
+    strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+    result = simulate.run_simulation(
+        FIXTURES / "valid_multisymbol",
+        config.initial_cash,
+        strategy,
+        config.friction,
+        config.risk_free_rate,
+    )
+    simulate.export_run_artifacts(result, FIXTURES / "valid_multisymbol", export_dir, run_id=run_id)
+    return export_dir
+
+
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -87,6 +102,18 @@ class ValidateRunTests(unittest.TestCase):
         self.assertEqual(Decimal("899.94"), result.replayed_final_cash)
         self.assertEqual({"SIM": Decimal("1")}, result.replayed_final_positions)
         self.assertEqual(Decimal("1001.9400"), result.replayed_final_equity)
+
+    def test_validate_run_passes_on_multisymbol_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = export_multisymbol_run(Path(tmp))
+            result = validate_run.validate_run_artifacts(run_dir)
+        self.assertEqual(validate_run.PASS, result.status)
+        self.assertEqual("mvp7-test", result.run_id)
+        self.assertEqual(2, result.order_count)
+        self.assertEqual(2, result.fill_count)
+        self.assertEqual(Decimal("849.9050"), result.replayed_final_cash)
+        self.assertEqual({"AAA": Decimal("1"), "BBB": Decimal("1")}, result.replayed_final_positions)
+        self.assertEqual(Decimal("1006.9050"), result.replayed_final_equity)
 
     def test_missing_required_artifact_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

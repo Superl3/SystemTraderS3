@@ -42,6 +42,21 @@ def export_friction_config_run(root: Path) -> Path:
     return export_dir
 
 
+def export_multisymbol_run(root: Path) -> Path:
+    export_dir = root / "run"
+    config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
+    strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+    result = simulate.run_simulation(
+        FIXTURES / "valid_multisymbol",
+        config.initial_cash,
+        strategy,
+        config.friction,
+        config.risk_free_rate,
+    )
+    simulate.export_run_artifacts(result, FIXTURES / "valid_multisymbol", export_dir, run_id="metrics-multisymbol-test")
+    return export_dir
+
+
 class MetricsTests(unittest.TestCase):
     def test_metrics_json_created_for_exported_default_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,6 +184,18 @@ class MetricsTests(unittest.TestCase):
             metrics.write_metrics(run_dir)
             second = (run_dir / "metrics.json").read_bytes()
         self.assertEqual(first, second)
+
+    def test_metrics_work_on_multisymbol_portfolio_equity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = export_multisymbol_run(Path(tmp))
+            result = metrics.write_metrics(run_dir)
+            payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(metrics.PASS, result.status)
+        self.assertEqual("0.700067", payload["total_return_pct"])
+        self.assertEqual("0.000000", payload["max_drawdown_pct"])
+        self.assertEqual(True, payload["benchmark_relative"]["benchmark_available"])
+        self.assertNotEqual("UNAVAILABLE", payload["benchmark_relative"]["alpha_pct"])
 
     def test_missing_required_metrics_input_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

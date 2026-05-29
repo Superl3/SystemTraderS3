@@ -150,15 +150,15 @@ class SimulationTests(unittest.TestCase):
             write_file(root, "market_prices.csv", "timestamp,symbol,price\n2026-01-01T09:30:00,SIM,100\n2026-01-01T09:30:00,SIM,101\n")
             result = simulate.run_simulation(root)
         self.assertEqual(simulate.FAIL, result.status)
-        self.assertIn("strictly increasing", result.error or "")
+        self.assertIn("duplicate timestamp/symbol", result.error or "")
 
-    def test_multi_symbol_feed_fails(self) -> None:
+    def test_multiplexed_market_prices_support_multiple_symbols(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_file(root, "market_prices.csv", "timestamp,symbol,price\n2026-01-01T09:30:00,SIM,100\n2026-01-02T09:30:00,ALT,101\n")
             result = simulate.run_simulation(root)
-        self.assertEqual(simulate.FAIL, result.status)
-        self.assertIn("exactly one symbol", result.error or "")
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual({"ALT", "SIM"}, set(result.equity_curve[-1].prices))
 
     def test_missing_benchmark_prices_warns_without_blocking_simulation(self) -> None:
         result = simulate.run_simulation(FIXTURES / "valid_minimal")
@@ -189,6 +189,34 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual([], result.warnings)
         self.assertEqual([Decimal("100"), Decimal("100"), Decimal("110")], [row.benchmark_price for row in result.equity_curve])
         self.assertEqual([Decimal("1000"), Decimal("1000"), Decimal("1100")], [row.benchmark_equity for row in result.equity_curve])
+
+    def test_multisymbol_price_files_forward_fill_and_run(self) -> None:
+        feed = simulate.DataFeed.from_dataset(FIXTURES / "valid_multisymbol")
+        events = feed.events
+        self.assertEqual(["AAA_prices.csv", "BBB_prices.csv"], feed.input_files)
+        self.assertEqual(3, len(events))
+        self.assertEqual({"AAA": Decimal("100"), "BBB": Decimal("50")}, events[0].prices)
+        self.assertEqual({"AAA": Decimal("101"), "BBB": Decimal("50")}, events[1].prices)
+        self.assertEqual({"AAA": Decimal("102"), "BBB": Decimal("55")}, events[2].prices)
+
+    def test_configured_buy_and_hold_handles_multisymbol_portfolio(self) -> None:
+        config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
+        strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+        result = simulate.run_simulation(
+            FIXTURES / "valid_multisymbol",
+            config.initial_cash,
+            strategy,
+            config.friction,
+            config.risk_free_rate,
+        )
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual(2, result.order_count)
+        self.assertEqual(2, result.fill_count)
+        self.assertEqual(Decimal("849.9050"), result.final_cash)
+        self.assertEqual({"AAA": Decimal("1"), "BBB": Decimal("1")}, result.final_positions)
+        self.assertEqual(Decimal("1006.9050"), result.final_equity)
+        self.assertEqual(Decimal("157"), result.equity_curve[-1].position_value)
+        self.assertEqual({"AAA": Decimal("102"), "BBB": Decimal("55")}, result.equity_curve[-1].prices)
 
     def test_initial_cash_default_and_override_work(self) -> None:
         default_result = simulate.run_simulation(FIXTURES / "valid_complete")
@@ -435,10 +463,10 @@ class SimulationExportTests(unittest.TestCase):
             self.assertEqual("0", account_summary["total_fees"])
             self.assertEqual("0", account_summary["total_slippage"])
             self.assertEqual(
-                "timestamp,equity,cash,position_value,symbol,position_quantity,last_price,benchmark_price,benchmark_equity",
+                "timestamp,equity,cash,position_value,symbol,position_quantity,last_price,benchmark_price,benchmark_equity,last_prices,position_quantities",
                 equity_curve[0],
             )
-            self.assertIn("2026-01-01,100000,99900,100,SIM,1,100,100,100000", equity_curve)
+            self.assertTrue(any(row.startswith("2026-01-01,100000,99900,100,SIM,1,100,100,100000,") for row in equity_curve))
 
     def test_export_records_configured_friction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -466,6 +494,27 @@ class SimulationExportTests(unittest.TestCase):
             self.assertEqual("0.02", manifest["risk_free_rate"])
             self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,1,100,0.0500,0.01", fills)
             self.assertIn("2026-01-01T09:30:00,T000001,market_follow,buy,1,100,0.0600,,SIM,BuyAndHold,market_follow,O000001,F000001", trades)
+
+    def test_export_records_multisymbol_portfolio_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export_dir = Path(tmp) / "run"
+            config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
+            strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
+            result = simulate.run_simulation(
+                FIXTURES / "valid_multisymbol",
+                config.initial_cash,
+                strategy,
+                config.friction,
+                config.risk_free_rate,
+            )
+            simulate.export_run_artifacts(result, FIXTURES / "valid_multisymbol", export_dir, run_id="mvp7-test")
+            account_summary = json.loads((export_dir / "account_summary.json").read_text(encoding="utf-8"))
+            manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            equity_curve = (export_dir / "equity_curve.csv").read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual({"AAA": "1", "BBB": "1"}, account_summary["final_positions"])
+        self.assertEqual(["AAA_prices.csv", "BBB_prices.csv", "benchmark_prices.csv"], manifest["input_files"])
+        self.assertTrue(any("PORTFOLIO" in row and "\"\"AAA\"\":\"\"102\"\"" in row for row in equity_curve))
 
     def test_orders_and_fills_contain_expected_buy_and_sell_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

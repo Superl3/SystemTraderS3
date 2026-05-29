@@ -8,7 +8,7 @@ import json
 import shutil
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -58,6 +58,7 @@ class MarketPriceEvent:
     timestamp: datetime
     symbol: str
     price: Decimal
+    prices: dict[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ class MarketState:
     timestamp: datetime
     symbol: str
     price: Decimal
+    prices: dict[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,8 @@ class AccountSnapshot:
     last_price: Decimal
     benchmark_price: Decimal | None = None
     benchmark_equity: Decimal | None = None
+    prices: dict[str, Decimal] = field(default_factory=dict)
+    positions: dict[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -140,6 +144,7 @@ class SimulationResult:
     fills: list[Fill]
     orders: list[OrderRecord]
     equity_curve: list[AccountSnapshot]
+    input_files: list[str]
     warnings: list[str]
     error: str | None = None
 
@@ -170,25 +175,36 @@ class Strategy(Protocol):
 
 
 class DataFeed:
-    """Validated one-symbol simulated price feed."""
+    """Validated deterministic multi-symbol simulated price feed."""
 
-    def __init__(self, events: list[MarketPriceEvent]) -> None:
+    def __init__(self, events: list[MarketPriceEvent], input_files: list[str]) -> None:
         self._events = events
+        self._input_files = input_files
 
     @classmethod
     def from_dataset(cls, dataset_dir: Path | str) -> "DataFeed":
-        path = Path(dataset_dir) / "market_prices.csv"
-        if not path.exists():
-            raise SimulationInputError("market_prices.csv is missing.")
-        if not path.is_file():
-            raise SimulationInputError("market_prices.csv must be a file.")
+        root = Path(dataset_dir)
+        path = root / "market_prices.csv"
+        if path.exists():
+            if not path.is_file():
+                raise SimulationInputError("market_prices.csv must be a file.")
+            raw_events = _read_market_prices(path, file_name="market_prices.csv")
+            input_files = ["market_prices.csv"]
+        else:
+            price_files = _market_price_files(root)
+            if not price_files:
+                raise SimulationInputError("market_prices.csv is missing.")
+            raw_events = []
+            input_files = []
+            for price_file in price_files:
+                raw_events.extend(_read_market_prices(price_file, file_name=price_file.name))
+                input_files.append(price_file.name)
 
-        events = _read_market_prices(path, file_name="market_prices.csv")
+        events = _merge_market_events(raw_events)
         if len(events) < 2:
-            raise SimulationInputError("market_prices.csv must contain at least two price rows.")
-        _validate_one_symbol_price_events(events, "market_prices.csv")
+            raise SimulationInputError("market price inputs must contain at least two synchronized price rows.")
 
-        return cls(events)
+        return cls(events, input_files)
 
     def __iter__(self) -> Iterable[MarketPriceEvent]:
         return iter(self._events)
@@ -196,6 +212,10 @@ class DataFeed:
     @property
     def events(self) -> list[MarketPriceEvent]:
         return list(self._events)
+
+    @property
+    def input_files(self) -> list[str]:
+        return list(self._input_files)
 
 
 class BenchmarkFeed:
@@ -314,42 +334,57 @@ class BuyAndHoldOneUnitStrategy:
     name = STRATEGY_NAME
 
     def __init__(self) -> None:
-        self._bought = False
+        self._bought_symbols: set[str] = set()
 
     def on_event(self, event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
         del account
-        if self._bought:
-            return []
-        self._bought = True
-        return [Order(side="buy", symbol=event.symbol, quantity=ONE_UNIT, price=event.price)]
+        orders: list[Order] = []
+        for symbol, price in sorted(_event_prices(event).items()):
+            if symbol in self._bought_symbols:
+                continue
+            self._bought_symbols.add(symbol)
+            orders.append(Order(side="buy", symbol=symbol, quantity=ONE_UNIT, price=price))
+        return orders
 
     def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
         del account_state
-        event = MarketPriceEvent(timestamp=market_state.timestamp, symbol=market_state.symbol, price=market_state.price)
+        event = MarketPriceEvent(
+            timestamp=market_state.timestamp,
+            symbol=market_state.symbol,
+            price=market_state.price,
+            prices=dict(sorted(_state_prices(market_state).items())),
+        )
         return self.on_event(event, SimulatedAccount(Decimal("0")))
 
     def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
-        held_quantity = account.positions.get(final_event.symbol, Decimal("0"))
-        if held_quantity <= 0:
-            return []
-        return [Order(side="sell", symbol=final_event.symbol, quantity=held_quantity, price=final_event.price)]
+        prices = _event_prices(final_event)
+        orders: list[Order] = []
+        for symbol, held_quantity in sorted(account.positions.items()):
+            if held_quantity <= 0 or symbol not in prices:
+                continue
+            orders.append(Order(side="sell", symbol=symbol, quantity=held_quantity, price=prices[symbol]))
+        return orders
 
 
 class BuyAndHoldStrategy:
     name = "BuyAndHold"
 
-    def __init__(self, quantity: Decimal = ONE_UNIT) -> None:
+    def __init__(self, quantity: Decimal = ONE_UNIT, target_symbol: str | None = None) -> None:
         if quantity <= 0:
             raise SimulationConfigError("BuyAndHold quantity must be positive.")
         self.quantity = quantity
-        self._bought = False
+        self.target_symbol = target_symbol
+        self._bought_symbols: set[str] = set()
 
     def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
         del account_state
-        if self._bought:
-            return []
-        self._bought = True
-        return [Order(side="buy", symbol=market_state.symbol, quantity=self.quantity, price=market_state.price)]
+        orders: list[Order] = []
+        for symbol, price in sorted(_target_prices(_state_prices(market_state), self.target_symbol).items()):
+            if symbol in self._bought_symbols:
+                continue
+            self._bought_symbols.add(symbol)
+            orders.append(Order(side="buy", symbol=symbol, quantity=self.quantity, price=price))
+        return orders
 
     def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
         del final_event, account
@@ -359,7 +394,13 @@ class BuyAndHoldStrategy:
 class MovingAverageCrossStrategy:
     name = "MovingAverageCross"
 
-    def __init__(self, short_window: int = 2, long_window: int = 3, quantity: Decimal = ONE_UNIT) -> None:
+    def __init__(
+        self,
+        short_window: int = 2,
+        long_window: int = 3,
+        quantity: Decimal = ONE_UNIT,
+        target_symbol: str | None = None,
+    ) -> None:
         if short_window <= 0:
             raise SimulationConfigError("MovingAverageCross short_window must be positive.")
         if long_window <= short_window:
@@ -369,22 +410,26 @@ class MovingAverageCrossStrategy:
         self.short_window = short_window
         self.long_window = long_window
         self.quantity = quantity
-        self._prices: list[Decimal] = []
+        self.target_symbol = target_symbol
+        self._prices: dict[str, list[Decimal]] = {}
 
     def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
-        self._prices.append(market_state.price)
-        if len(self._prices) < self.long_window:
-            return []
+        orders: list[Order] = []
+        for symbol, price in sorted(_target_prices(_state_prices(market_state), self.target_symbol).items()):
+            prices = self._prices.setdefault(symbol, [])
+            prices.append(price)
+            if len(prices) < self.long_window:
+                continue
 
-        short_avg = sum(self._prices[-self.short_window:]) / Decimal(self.short_window)
-        long_avg = sum(self._prices[-self.long_window:]) / Decimal(self.long_window)
-        held_quantity = account_state.positions.get(market_state.symbol, Decimal("0"))
+            short_avg = sum(prices[-self.short_window:]) / Decimal(self.short_window)
+            long_avg = sum(prices[-self.long_window:]) / Decimal(self.long_window)
+            held_quantity = account_state.positions.get(symbol, Decimal("0"))
 
-        if short_avg > long_avg and held_quantity <= 0:
-            return [Order(side="buy", symbol=market_state.symbol, quantity=self.quantity, price=market_state.price)]
-        if short_avg < long_avg and held_quantity > 0:
-            return [Order(side="sell", symbol=market_state.symbol, quantity=held_quantity, price=market_state.price)]
-        return []
+            if short_avg > long_avg and held_quantity <= 0:
+                orders.append(Order(side="buy", symbol=symbol, quantity=self.quantity, price=price))
+            elif short_avg < long_avg and held_quantity > 0:
+                orders.append(Order(side="sell", symbol=symbol, quantity=held_quantity, price=price))
+        return orders
 
     def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
         del final_event, account
@@ -422,7 +467,7 @@ class SimulationEngine:
         final_event = events[-1]
 
         for event in events:
-            self.last_prices[event.symbol] = event.price
+            self.last_prices.update(_event_prices(event))
             self._execute_orders(event, self.strategy.on_data(_market_state(event), _account_state(self.account)))
             if event == final_event:
                 self._execute_orders(final_event, self.strategy.on_finish(final_event, self.account))
@@ -439,8 +484,12 @@ class SimulationEngine:
             self.fills.append(fill)
 
     def _record_account_snapshot(self, event: MarketPriceEvent) -> None:
-        position_quantity = self.account.positions.get(event.symbol, Decimal("0"))
-        position_value = position_quantity * event.price
+        prices = _event_prices(event)
+        positions = dict(sorted(self.account.positions.items()))
+        position_value = sum((quantity * prices[symbol] for symbol, quantity in positions.items() if symbol in prices), ZERO)
+        display_symbol = event.symbol if len(prices) == 1 else "PORTFOLIO"
+        display_quantity = positions.get(event.symbol, ZERO) if len(prices) == 1 else sum(positions.values(), ZERO)
+        display_price = event.price if len(prices) == 1 else ZERO
         benchmark_snapshot = self.benchmark_feed.snapshot_for(event.timestamp)
         self.equity_curve.append(
             AccountSnapshot(
@@ -448,11 +497,13 @@ class SimulationEngine:
                 equity=self.account.cash + position_value,
                 cash=self.account.cash,
                 position_value=position_value,
-                symbol=event.symbol,
-                position_quantity=position_quantity,
-                last_price=event.price,
+                symbol=display_symbol,
+                position_quantity=display_quantity,
+                last_price=display_price,
                 benchmark_price=benchmark_snapshot.price,
                 benchmark_equity=benchmark_snapshot.equity,
+                prices=dict(sorted(prices.items())),
+                positions=positions,
             )
         )
 
@@ -496,6 +547,7 @@ def run_simulation(
             fills=list(engine.fills),
             orders=list(engine.orders),
             equity_curve=list(engine.equity_curve),
+            input_files=feed.input_files + (["benchmark_prices.csv"] if not benchmark_feed.warnings else []),
             warnings=list(benchmark_feed.warnings),
         )
     except (SimulationInputError, SimulationExecutionError) as exc:
@@ -517,6 +569,7 @@ def run_simulation(
             fills=[],
             orders=[],
             equity_curve=[],
+            input_files=[],
             warnings=[],
             error=str(exc),
         )
@@ -674,12 +727,19 @@ def create_strategy(strategy_name: str, strategy_params: dict[str, object]) -> S
 
     if strategy_class is BuyAndHoldStrategy:
         quantity = _decimal_param(strategy_params, "quantity", ONE_UNIT)
-        return BuyAndHoldStrategy(quantity=quantity)
+        target_symbol = _optional_str_param(strategy_params, "target_symbol")
+        return BuyAndHoldStrategy(quantity=quantity, target_symbol=target_symbol)
     if strategy_class is MovingAverageCrossStrategy:
         short_window = _int_param(strategy_params, "short_window", 2)
         long_window = _int_param(strategy_params, "long_window", 3)
         quantity = _decimal_param(strategy_params, "quantity", ONE_UNIT)
-        return MovingAverageCrossStrategy(short_window=short_window, long_window=long_window, quantity=quantity)
+        target_symbol = _optional_str_param(strategy_params, "target_symbol")
+        return MovingAverageCrossStrategy(
+            short_window=short_window,
+            long_window=long_window,
+            quantity=quantity,
+            target_symbol=target_symbol,
+        )
 
     raise SimulationConfigError(f"Strategy {strategy_name!r} is registered but cannot be constructed.")
 
@@ -733,19 +793,67 @@ def _read_market_prices(path: Path, file_name: str) -> list[MarketPriceEvent]:
     return rows
 
 
+def _market_price_files(root: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in root.glob("*_prices.csv")
+        if path.name not in {"benchmark_prices.csv", "market_prices.csv"} and path.is_file()
+    )
+
+
+def _merge_market_events(raw_events: list[MarketPriceEvent]) -> list[MarketPriceEvent]:
+    if not raw_events:
+        return []
+
+    _validate_comparable_timestamps(raw_events, "market price inputs")
+    events_by_timestamp: dict[datetime, list[MarketPriceEvent]] = {}
+    seen_keys: set[tuple[datetime, str]] = set()
+    for event in raw_events:
+        key = (event.timestamp, event.symbol)
+        if key in seen_keys:
+            raise SimulationInputError(
+                f"market price inputs contain duplicate timestamp/symbol: {event.timestamp.isoformat()} {event.symbol}."
+            )
+        seen_keys.add(key)
+        events_by_timestamp.setdefault(event.timestamp, []).append(event)
+
+    current_prices: dict[str, Decimal] = {}
+    merged: list[MarketPriceEvent] = []
+    for timestamp in sorted(events_by_timestamp):
+        for event in sorted(events_by_timestamp[timestamp], key=lambda item: item.symbol):
+            current_prices[event.symbol] = event.price
+        prices = dict(sorted(current_prices.items()))
+        primary_symbol = sorted(prices)[0]
+        merged.append(
+            MarketPriceEvent(
+                timestamp=timestamp,
+                symbol=primary_symbol,
+                price=prices[primary_symbol],
+                prices=prices,
+            )
+        )
+    return merged
+
+
 def _validate_one_symbol_price_events(events: list[MarketPriceEvent], file_name: str) -> None:
     symbols = sorted({event.symbol for event in events})
     if len(symbols) != 1:
         raise SimulationInputError(f"{file_name} must contain exactly one symbol.")
 
-    previous: datetime | None = None
+    _validate_comparable_timestamps(events, file_name)
+    previous_by_symbol: dict[str, datetime] = {}
     for event in events:
-        if previous is not None:
-            if not audit._timestamps_are_comparable(previous, event.timestamp):
-                raise SimulationInputError(f"{file_name} cannot mix timezone-aware and timezone-naive timestamps.")
-            if event.timestamp <= previous:
-                raise SimulationInputError(f"{file_name} timestamps must be strictly increasing.")
-        previous = event.timestamp
+        previous = previous_by_symbol.get(event.symbol)
+        if previous is not None and event.timestamp <= previous:
+            raise SimulationInputError(f"{file_name} timestamps must be strictly increasing.")
+        previous_by_symbol[event.symbol] = event.timestamp
+
+
+def _validate_comparable_timestamps(events: list[MarketPriceEvent], file_name: str) -> None:
+    first = events[0].timestamp
+    for event in events[1:]:
+        if not audit._timestamps_are_comparable(first, event.timestamp):
+            raise SimulationInputError(f"{file_name} cannot mix timezone-aware and timezone-naive timestamps.")
 
 
 def _align_benchmark_to_market(
@@ -850,6 +958,8 @@ def _write_equity_curve(path: Path, result: SimulationResult) -> None:
         "last_price",
         "benchmark_price",
         "benchmark_equity",
+        "last_prices",
+        "position_quantities",
     ]
     rows = [
         [
@@ -862,6 +972,8 @@ def _write_equity_curve(path: Path, result: SimulationResult) -> None:
             format_decimal(snapshot.last_price),
             _format_optional_csv_decimal(snapshot.benchmark_price),
             _format_optional_csv_decimal(snapshot.benchmark_equity),
+            _format_decimal_mapping(snapshot.prices),
+            _format_decimal_mapping(snapshot.positions),
         ]
         for snapshot in result.equity_curve
     ]
@@ -967,18 +1079,35 @@ def _write_csv(path: Path, headers: list[str], rows: list[list[str]]) -> None:
 
 
 def _input_files_payload(result: SimulationResult) -> list[str]:
-    input_files = ["market_prices.csv"]
-    if any(snapshot.benchmark_price is not None for snapshot in result.equity_curve):
-        input_files.append("benchmark_prices.csv")
-    return input_files
+    return list(result.input_files)
 
 
 def _market_state(event: MarketPriceEvent) -> MarketState:
-    return MarketState(timestamp=event.timestamp, symbol=event.symbol, price=event.price)
+    return MarketState(timestamp=event.timestamp, symbol=event.symbol, price=event.price, prices=_event_prices(event))
 
 
 def _account_state(account: SimulatedAccount) -> AccountState:
     return AccountState(cash=account.cash, positions=dict(sorted(account.positions.items())))
+
+
+def _event_prices(event: MarketPriceEvent) -> dict[str, Decimal]:
+    if event.prices:
+        return dict(sorted(event.prices.items()))
+    return {event.symbol: event.price}
+
+
+def _state_prices(market_state: MarketState) -> dict[str, Decimal]:
+    if market_state.prices:
+        return dict(sorted(market_state.prices.items()))
+    return {market_state.symbol: market_state.price}
+
+
+def _target_prices(prices: dict[str, Decimal], target_symbol: str | None) -> dict[str, Decimal]:
+    if target_symbol is None:
+        return dict(sorted(prices.items()))
+    if target_symbol not in prices:
+        return {}
+    return {target_symbol: prices[target_symbol]}
 
 
 def _decimal_param(params: dict[str, object], key: str, default: Decimal) -> Decimal:
@@ -991,6 +1120,15 @@ def _decimal_param(params: dict[str, object], key: str, default: Decimal) -> Dec
     if parsed is None:
         raise SimulationConfigError(f"Strategy parameter {key} must be a finite decimal.")
     return parsed
+
+
+def _optional_str_param(params: dict[str, object], key: str) -> str | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise SimulationConfigError(f"Strategy parameter {key} must be a non-empty string when provided.")
+    return value.strip()
 
 
 def _parse_friction_config(value: object) -> FrictionModel:
@@ -1103,6 +1241,10 @@ def _format_optional_csv_decimal(value: Decimal | None) -> str:
     if value is None:
         return ""
     return format_decimal(value)
+
+
+def _format_decimal_mapping(values: dict[str, Decimal]) -> str:
+    return json.dumps({key: format_decimal(value) for key, value in sorted(values.items())}, sort_keys=True, separators=(",", ":"))
 
 
 def format_positions(positions: dict[str, Decimal]) -> str:
