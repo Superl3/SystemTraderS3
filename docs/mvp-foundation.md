@@ -4,7 +4,7 @@
 
 This project is not an alpha-discovery bot and must not promise profit. Strategies are presets running on common base rules. Losses may be acceptable when they come from intended market or factor exposure. Unexplained, excessive, structural, execution, system, data, or order-related losses are failure signals that later phases should classify explicitly.
 
-MVP0 is deliberately limited to simulated dataset audit. It answers one question: is the provided simulated data structurally ready for future analysis?
+The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation. It does not yet attempt strategy quality, benchmark-relative evaluation, or risk classification.
 
 ## Non-Goals
 
@@ -38,6 +38,34 @@ Status aggregation is worst-wins: `FAIL > INCONCLUSIVE > PASS`.
 
 MVP0 does not enforce financial consistency between `trades.csv` and `equity_curve.csv`. It does not calculate returns, drawdown, beta, correlation, tracking error, capture, turnover, expectancy, PnL, or simulated-to-live reproducibility.
 
+## Current CLI Layers
+
+MVP0 audit:
+
+```powershell
+rtk python -m system_trading_s3.audit tests/fixtures/valid_minimal
+```
+
+MVP1 simulate:
+
+```powershell
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
+```
+
+MVP2 export:
+
+```powershell
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --export-dir <run_dir> --run-id docs-smoke
+```
+
+MVP3 validate:
+
+```powershell
+rtk python -m system_trading_s3.validate_run <run_dir>
+```
+
+`market_prices.csv` is the true simulation input for MVP1+. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
+
 ## CSV Policy
 
 - Files are parsed with `utf-8-sig`.
@@ -60,21 +88,43 @@ Field sign policy is field-specific:
 
 ## Staged Roadmap
 
-Phase 0: simulated data audit.
+Completed MVP0: simulated dataset audit.
 
-Phase 1: baseline performance and cost metrics.
+Completed MVP1: thin paper-trading simulation loop.
 
-Phase 2: benchmark and factor-relative metrics.
+Completed MVP2: deterministic run artifact export.
 
-Phase 3: loss classification.
+Completed MVP3: run artifact replay and baseline accounting validation.
 
-Phase 4: common base risk rule engine.
+Candidate MVP4: small run-artifact reader/report or validation hardening that improves operator trust without adding strategy complexity.
 
-Phase 5: strategy preset abstraction.
+Later phase: richer metrics.
 
-Phase 6: paper/live shadow testing design.
+Later phase: benchmark and factor-relative metrics.
 
-Phase 7: small-capital live validation criteria only.
+Later phase: loss classification.
+
+Later phase: common base risk rule engine.
+
+Later phase: strategy preset abstraction.
+
+Later phase: paper/live shadow testing design.
+
+Later phase: small-capital live validation criteria only.
+
+## Current Limitations
+
+- One symbol only.
+- One hard-coded strategy: buy one unit at the first price and sell the held quantity at the final price.
+- Immediate fills only.
+- Zero fee and zero slippage.
+- No partial fills.
+- No richer order lifecycle.
+- No risk budget, sizing model, exposure limits, cooldown, or kill switch.
+- No generated benchmark or factor exposure data.
+- No performance metrics beyond final account state.
+- No benchmark-relative or factor-relative analysis.
+- No live trading, broker integration, dashboard, optimization, or ML.
 
 ## Future Data Requirements
 
