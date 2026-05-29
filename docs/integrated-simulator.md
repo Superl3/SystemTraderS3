@@ -115,6 +115,7 @@ $run = "$env:TEMP\systemtraders3-us-tech-demo"
 rtk python -m system_trading_s3.simulate datasets/us_tech_100_simulated --config configs/strategies/periodic_momentum_top10.json --export-dir $run --run-id us-tech-demo --overwrite
 rtk python -m system_trading_s3.validate_run $run
 rtk python -m system_trading_s3.metrics $run
+rtk python -m system_trading_s3.factor_report $run
 ```
 
 ## Dashboard Flow
@@ -153,4 +154,4 @@ These boundaries are intentionally file-based so objects can be copied, replaced
 - Dashboard UI uses CDN assets.
 - Metrics are portfolio-level only.
 - Metrics report a gap when annualized values are based on fewer than 20 equity rows.
-- Factor reporting and loss classification are not implemented yet.
+- Factor reporting is buy-fill exposure reporting only; full attribution and loss classification are not implemented yet.

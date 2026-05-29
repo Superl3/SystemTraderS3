@@ -4,7 +4,7 @@
 
 This project is not an alpha-discovery bot and must not promise profit. Strategies are presets running on common base rules. Losses may be acceptable when they come from intended market or factor exposure. Unexplained, excessive, structural, execution, system, data, or order-related losses are failure signals that later phases should classify explicitly.
 
-The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation, to basic post-run metrics and benchmark-relative metrics, to periodic factor-driven rebalancing. It does not yet attempt factor attribution, risk classification, or claims about strategy quality.
+The current baseline is deliberately small. It proves a local simulated workflow from dataset audit, to paper-trading simulation, to deterministic run artifact export, to replay validation, to basic post-run metrics and benchmark-relative metrics, to periodic factor-driven rebalancing, to a thin factor exposure report. It does not yet attempt full factor attribution, risk classification, or claims about strategy quality.
 
 ## Non-Goals
 
@@ -71,6 +71,12 @@ MVP5/MVP6 metrics:
 rtk python -m system_trading_s3.metrics <run_dir>
 ```
 
+MVP10 factor report:
+
+```powershell
+rtk python -m system_trading_s3.factor_report <run_dir>
+```
+
 `market_prices.csv` or sorted `*_prices.csv` files are the true simulation inputs for MVP1+. Optional `benchmark_prices.csv` is read by the simulation engine, forward-filled onto market timestamps, and exported as normalized benchmark equity. Optional `factors.csv` is read by the simulation engine, forward-filled onto market timestamps, and exposed to strategies as cross-sectional factor data. Generated `equity_curve.csv` and `trades.csv` are run outputs that MVP0 can audit as a self-check.
 
 Drop-in datasets can live under `datasets/<dataset_id>/`, and drop-in strategy configs can live under `configs/strategies/*.json`. The CLI accepts arbitrary dataset/config paths, and the dashboard lists both fixture and drop-in objects. `datasets/us_tech_100_simulated` is a committed 100-symbol synthetic historical-style US tech dataset for integration testing and demos.
@@ -117,7 +123,9 @@ Completed MVP8: target-weight strategy intents and integer-share portfolio rebal
 
 Completed MVP9: optional factor data ingestion and periodic factor-weight rebalancing.
 
-Candidate MVP10: factor-aware reporting or loss classification using explicit target factor definitions.
+Completed MVP10: factor-aware buy-side exposure reporting from exported fills and source `factors.csv`.
+
+Candidate MVP11: loss classification using explicit target factor definitions.
 
 Later phase: richer risk-adjusted metrics.
 
@@ -148,7 +156,7 @@ Later phase: small-capital live validation criteria only.
 - No generated factor exposure data.
 - Performance metrics are still narrow: total return, row-interval CAGR, max drawdown, realized-PnL win rate, profit factor, trade counts, alpha, beta, Sharpe ratio, tracking error, and information ratio.
 - Metrics evaluate portfolio-level equity only, not per-symbol attribution.
-- No factor attribution or factor-relative loss classification yet.
+- No full factor attribution or factor-relative loss classification yet; current factor reporting only summarizes buy fills against available factor ranks.
 - No live trading, broker integration, production dashboard, optimization, or ML.
 
 ## Future Data Requirements

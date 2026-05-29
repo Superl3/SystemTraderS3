@@ -8,6 +8,7 @@ The current baseline has four CLI layers:
 2. `simulate`: config-driven paper-trading loop using simulated market prices.
 3. `validate_run`: replay validation for exported simulation run artifacts.
 4. `metrics`: deterministic post-run baseline and benchmark-relative metrics from exported artifacts.
+5. `factor_report`: deterministic factor exposure report from exported fills and dataset `factors.csv`.
 
 The long-term thesis is that strategies are presets running on common base rules. The system should evaluate outcomes relative to target market or factor exposure, not only by absolute profit. The current code intentionally stops before risk rules, factor attribution, loss classification, richer strategy modeling, or live integration.
 
@@ -39,6 +40,9 @@ rtk python -m system_trading_s3.validate_run $run
 
 # MVP5/MVP6: write deterministic baseline and benchmark-relative metrics
 rtk python -m system_trading_s3.metrics $run
+
+# MVP10: write factor-aware exposure report
+rtk python -m system_trading_s3.factor_report $run
 
 # Downloader contract smoke without network or optional dependencies
 rtk python scripts/download_data.py --offline-smoke --output-dir "$env:TEMP\systemtraders3-offline-smoke"
@@ -139,6 +143,15 @@ MVP5/MVP6 metrics:
 - reports `UNAVAILABLE` and gaps rather than inferring missing realized PnL;
 - reports a sample-size gap when annualized metrics are calculated from fewer than 20 equity rows.
 
+MVP10 factor report:
+
+- reads exported `fills.csv` and the source dataset `factors.csv`;
+- forward-fills factor observations up to each buy fill timestamp;
+- reports average buy-side factor value, factor rank, and top-rank buy counts by factor name;
+- writes deterministic `factor_report.json`;
+- reports gaps instead of fabricating factor exposure;
+- is not a profitability report.
+
 ## Audit Status
 
 - `PASS`: required files and required fields are valid, and no optional readiness gaps were found.
@@ -176,7 +189,7 @@ CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are a
 - No optimization.
 - No opaque ML prediction.
 - No production, hosted, or broker-connected dashboard.
-- No factor attribution or factor-relative loss classification yet.
+- No full factor attribution or factor-relative loss classification yet; `factor_report` only checks current buy-side factor exposure alignment.
 - No richer risk-adjusted metrics such as Sortino, capture, or turnover yet.
 - No per-symbol metrics yet; metrics evaluate portfolio-level equity only.
 - No claim that any strategy is profitable.

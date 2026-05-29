@@ -16,6 +16,7 @@ fixture/config
   -> audit self-check
   -> validate_run accounting replay
   -> metrics
+  -> factor_report
   -> optional local dashboard
 ```
 
@@ -25,6 +26,7 @@ fixture/config
 - `simulate`: 시뮬레이션 실행과 artifact 생성
 - `validate_run`: 생성된 artifact의 독립 회계 재검증
 - `metrics`: artifact 기반 사후 지표 계산
+- `factor_report`: fill과 factor data를 연결해 buy-side factor exposure 정렬 상태를 보고
 
 이 구조 덕분에 live trading, broker integration, optimization, ML 없이도 재현 가능한 신뢰층이 생겼다. 시스템은 계속 profit promise를 하지 않는 방향을 유지해야 한다.
 
@@ -34,7 +36,7 @@ fixture/config
 
 - `master`
 - `origin/master`와 동기화됨
-- 최신 기능 baseline: `ded9eec`
+- 최신 안정화 baseline: `eb19e0e`
 - 이 리포트 자체가 커밋되면 HEAD는 더 앞선 문서 커밋이 된다.
 
 주요 커밋 흐름:
@@ -51,6 +53,8 @@ fixture/config
 - `8eeaac9` - stability pass for dashboard/downloader/manifest/tests
 - `7054db3` - drop-in historical-style US tech 100 dataset/config/dashboard selection
 - `ded9eec` - dashboard strategy catalog and form-driven config editing
+- `eb19e0e` - dashboard/downloader/metrics stabilization closure
+- latest - factor-aware buy-side exposure reporting
 
 ## 구현된 계층
 
@@ -239,6 +243,26 @@ rtk python -m system_trading_s3.metrics <run_artifact_dir>
 - fixture가 3개 equity row뿐이라 CAGR, Sharpe 같은 연율화 지표가 과장되어 보일 수 있다.
 - 이 시스템은 어떤 전략도 수익성 있다고 주장하면 안 된다.
 
+### MVP10: Factor-Aware Reporting
+
+실행:
+
+```powershell
+rtk python -m system_trading_s3.factor_report <run_artifact_dir>
+```
+
+주요 파일:
+
+- `system_trading_s3/factor_report.py`
+
+역할:
+
+- exported `fills.csv`와 source dataset의 `factors.csv`를 읽는다.
+- 각 buy fill 시점까지 factor를 forward-fill하여 해당 심볼의 factor 값을 확인한다.
+- factor별 average buy factor value, average/best/worst buy factor rank, top-rank buy count, missing factor count를 기록한다.
+- `factor_report.json`을 deterministic하게 쓴다.
+- 수익성 평가가 아니라 의도한 factor exposure에 맞게 매수되었는지를 확인하는 얇은 리포트다.
+
 ## 추가된 편의 계층
 
 ### Dashboard
@@ -341,6 +365,7 @@ rtk git diff --check
 - demo run validation: `PASS`
 - demo run audit: `INCONCLUSIVE`, optional gap만 있음
 - demo run metrics: `PASS`
+- factor report: `PASS` when source `factors.csv` is available; `INCONCLUSIVE` when factor data is missing
 - download script help: optional dependency 없이 실행 가능
 - py_compile: `PASS`
 - diff whitespace check: `PASS`
@@ -409,11 +434,11 @@ rtk git diff --check
 
 ## 다음 방향성 논의 후보
 
-안정화 이후 MVP10 후보는 세 가지다.
+안정화 이후 다음 후보는 세 가지다.
 
-1. Factor-aware reporting
+1. Full factor attribution
 
-   현재 factor로 리밸런싱은 하지만, 결과가 의도한 factor exposure에 맞았는지 설명하는 리포트는 없다. 가장 제품 thesis에 가깝다.
+   현재 `factor_report`는 buy fill의 factor 정렬 상태만 확인한다. 다음 단계는 보유 기간별 factor exposure와 equity movement를 연결하는 attribution이다.
 
 2. Loss classification groundwork
 
