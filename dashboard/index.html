@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SystemTradingS3 대시보드</title>
+    <!-- Google Fonts: Inter & Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        :root {
+            --bg-main: #080b11;
+            --bg-sidebar: #0f131c;
+            --bg-card: #141b27;
+            --bg-card-hover: #1b2434;
+            --border-color: #242d3d;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --primary: #7c3aed;
+            --primary-glow: rgba(124, 58, 237, 0.4);
+            --primary-hover: #6d28d9;
+            --success: #10b981;
+            --success-glow: rgba(16, 185, 129, 0.2);
+            --success-bg: rgba(16, 185, 129, 0.08);
+            --warning: #f59e0b;
+            --warning-glow: rgba(245, 158, 11, 0.2);
+            --warning-bg: rgba(245, 158, 11, 0.08);
+            --error: #ef4444;
+            --error-glow: rgba(239, 68, 68, 0.2);
+            --error-bg: rgba(239, 68, 68, 0.08);
+            --info: #3b82f6;
+            --info-bg: rgba(59, 130, 246, 0.08);
+            --accent-cyan: #06b6d4;
+            --accent-orange: #f97316;
+            --font-main: 'Inter', sans-serif;
+            --font-title: 'Outfit', sans-serif;
+            --sidebar-width: 320px;
+            --card-radius: 16px;
+            --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-normal: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-main);
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            overflow-x: hidden;
+        }
+
+        /* --- Scrollbar --- */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-main);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+
+        /* --- Sidebar Layout --- */
+        .sidebar {
+            width: var(--sidebar-width);
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-color);
+            height: 100vh;
+            position: fixed;
+            left: 0;
+            top: 0;
+            display: flex;
+            flex-direction: flex-col;
+            padding: 24px;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        .sidebar-content {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 32px;
+        }
+
+        .brand-logo {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--primary), var(--accent-cyan));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: bold;
+            font-family: var(--font-title);
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        .brand-title {
+            font-family: var(--font-title);
+            font-size: 1.25rem;
+            font-weight: 700;
+            background: linear-gradient(to right, var(--text-main), var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .btn-new-run {
+            background: linear-gradient(135deg, var(--primary), #6366f1);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 14px var(--primary-glow);
+            transition: var(--transition-fast);
+        }
+
+        .btn-new-run:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px var(--primary-glow);
+        }
+
+        .run-list-title {
+            font-family: var(--font-title);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+
+        .run-list {
+            list-style: none;
+            overflow-y: auto;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .run-item {
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 14px;
+            cursor: pointer;
+            transition: var(--transition-fast);
+        }
+
+        .run-item:hover {
+            background-color: var(--bg-card-hover);
+            border-color: var(--primary);
+        }
+
+        .run-item.active {
+            background-color: rgba(124, 58, 237, 0.08);
+            border-color: var(--primary);
+            box-shadow: inset 0 0 8px rgba(124, 58, 237, 0.1);
+        }
+
+        .run-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .run-item-id {
+            font-weight: 600;
+            font-size: 0.95rem;
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .run-item-badge {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .badge-pass { background-color: var(--success-bg); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.2); }
+        .badge-fail { background-color: var(--error-bg); color: var(--error); border: 1px solid rgba(239, 68, 68, 0.2); }
+        .badge-inc { background-color: var(--warning-bg); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.2); }
+
+        .run-item-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* --- Main Content Layout --- */
+        .main-content {
+            margin-left: var(--sidebar-width);
+            flex-grow: 1;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 32px;
+            width: calc(100% - var(--sidebar-width));
+        }
+
+        /* --- Dashboard Header --- */
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .header-title-section h1 {
+            font-family: var(--font-title);
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .header-meta {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .meta-pill {
+            background-color: var(--bg-main);
+            padding: 4px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* --- Metrics Cards Grid --- */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+        }
+
+        .metric-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            position: relative;
+            overflow: hidden;
+            transition: var(--transition-normal);
+        }
+
+        .metric-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--primary);
+            box-shadow: 0 8px 30px rgba(124, 58, 237, 0.1);
+        }
+
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background-color: var(--accent);
+        }
+
+        .metric-label-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-family: var(--font-title);
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .metric-footer {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Color configurations for metric border indicators */
+        .card-return { --accent: var(--info); }
+        .card-cagr { --accent: var(--accent-cyan); }
+        .card-mdd { --accent: var(--error); }
+        .card-sharpe { --accent: var(--primary); }
+        .card-alpha { --accent: var(--success); }
+        .card-beta { --accent: var(--accent-orange); }
+        .card-winrate { --accent: #14b8a6; }
+        .card-trades { --accent: #6b7280; }
+
+        /* --- Charts Layout --- */
+        .charts-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 1200px) {
+            .charts-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .chart-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .chart-title {
+            font-family: var(--font-title);
+            font-size: 1.1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chart-container {
+            position: relative;
+            width: 100%;
+            height: 380px;
+        }
+
+        .chart-container-small {
+            position: relative;
+            width: 100%;
+            height: 200px;
+        }
+
+        /* --- Trades Table Section --- */
+        .section-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-family: var(--font-title);
+            font-size: 1.15rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .table-container {
+            width: 100%;
+            overflow-x: auto;
+            max-height: 450px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+
+        th {
+            background-color: var(--bg-sidebar);
+            color: var(--text-muted);
+            font-weight: 600;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        tr:hover td {
+            background-color: var(--bg-card-hover);
+        }
+
+        .pill-side {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            padding: 4px 8px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .pill-buy {
+            background-color: rgba(16, 185, 129, 0.12);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .pill-sell {
+            background-color: rgba(239, 68, 68, 0.12);
+            color: var(--error);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .pnl-positive { color: var(--success); font-weight: 600; }
+        .pnl-negative { color: var(--error); font-weight: 600; }
+
+        .table-filter-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .filter-input {
+            background-color: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 8px 14px;
+            border-radius: 8px;
+            outline: none;
+            font-family: var(--font-main);
+            font-size: 0.85rem;
+            width: 220px;
+        }
+
+        .filter-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-glow);
+        }
+
+        /* --- Audit Log Section --- */
+        .audit-warnings-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+
+        .audit-warning-item {
+            background-color: rgba(245, 158, 11, 0.05);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 0.85rem;
+            color: var(--warning);
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .audit-warning-item svg {
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .audit-no-warnings {
+            color: var(--success);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            background-color: rgba(16, 185, 129, 0.05);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            padding: 16px;
+            border-radius: 8px;
+        }
+
+        /* --- Modal (Simulate Panel) --- */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity var(--transition-normal);
+        }
+
+        .modal-overlay.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            width: 100%;
+            max-width: 500px;
+            padding: 32px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            transform: translateY(-20px);
+            transition: transform var(--transition-normal);
+        }
+
+        .modal-overlay.open .modal-card {
+            transform: translateY(0);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .modal-title {
+            font-family: var(--font-title);
+            font-size: 1.4rem;
+            font-weight: 700;
+        }
+
+        .btn-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: var(--transition-fast);
+        }
+
+        .btn-close:hover {
+            color: var(--text-main);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .form-control {
+            background-color: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 12px;
+            border-radius: 8px;
+            outline: none;
+            font-family: var(--font-main);
+            font-size: 0.9rem;
+            width: 100%;
+        }
+
+        .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px var(--primary-glow);
+        }
+
+        .btn-submit {
+            background: linear-gradient(135deg, var(--primary), #6366f1);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 10px;
+            transition: var(--transition-fast);
+        }
+
+        .btn-submit:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px var(--primary-glow);
+        }
+
+        /* --- Loading Overlay --- */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(8, 11, 17, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 1000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity var(--transition-fast);
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid var(--border-color);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-family: var(--font-title);
+            font-size: 1.15rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- --- Sidebar --- -->
+    <aside class="sidebar">
+        <div class="sidebar-content">
+            <div class="brand">
+                <div class="brand-logo">S3</div>
+                <div class="brand-title">SystemTrader S3</div>
+            </div>
+
+            <button class="btn-new-run" onclick="openSimModal()">
+                <i data-lucide="play"></i> 시뮬레이션 실행
+            </button>
+
+            <h2 class="run-list-title">실행 이력 (Runs)</h2>
+            <ul class="run-list" id="runList">
+                <!-- Javascript will load runs here -->
+            </ul>
+        </div>
+    </aside>
+
+    <!-- --- Main Content Container --- -->
+    <main class="main-content">
+        <!-- Dashboard Header -->
+        <header class="dashboard-header">
+            <div class="header-title-section">
+                <h1 id="headerRunId">시뮬레이션을 선택해 주세요</h1>
+                <div class="header-meta">
+                    <span class="meta-pill" id="headerStrategy"><i data-lucide="cpu" style="width: 14px;"></i> -</span>
+                    <span class="meta-pill" id="headerDataset"><i data-lucide="database" style="width: 14px;"></i> -</span>
+                </div>
+            </div>
+            <div id="headerBadgeContainer">
+                <!-- Status badge loaded dynamically -->
+            </div>
+        </header>
+
+        <!-- Metric Summary Card Grid -->
+        <section class="metrics-grid">
+            <!-- Total Return -->
+            <div class="metric-card card-return">
+                <div class="metric-label-container">
+                    <span>총 수익률</span>
+                    <i data-lucide="trending-up" style="color: var(--info); width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricTotalReturn">-</div>
+                <div class="metric-footer">전체 기간 자산 곡선 등락폭</div>
+            </div>
+
+            <!-- CAGR -->
+            <div class="metric-card card-cagr">
+                <div class="metric-label-container">
+                    <span>연평균 복리 수익률</span>
+                    <i data-lucide="activity" style="color: var(--accent-cyan); width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricCAGR">-</div>
+                <div class="metric-footer">CAGR (252 거래일 기준)</div>
+            </div>
+
+            <!-- MDD -->
+            <div class="metric-card card-mdd">
+                <div class="metric-label-container">
+                    <span>최대 낙폭 (MDD)</span>
+                    <i data-lucide="shield-alert" style="color: var(--error); width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricMDD">-</div>
+                <div class="metric-footer" style="color: var(--error);">최대 역사적 하락 깊이</div>
+            </div>
+
+            <!-- Sharpe -->
+            <div class="metric-card card-sharpe">
+                <div class="metric-label-container">
+                    <span>샤프 지수 (Sharpe)</span>
+                    <i data-lucide="bar-chart-2" style="color: var(--primary); width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricSharpe">-</div>
+                <div class="metric-footer">변동성 대비 초과 수익 지수</div>
+            </div>
+
+            <!-- Alpha -->
+            <div class="metric-card card-alpha">
+                <div class="metric-label-container">
+                    <span>벤치마크 대비 알파</span>
+                    <i data-lucide="award" style="color: var(--success); width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricAlpha">-</div>
+                <div class="metric-footer">초과 성과 수익률</div>
+            </div>
+
+            <!-- Beta -->
+            <div class="metric-card card-beta">
+                <div class="metric-label-container">
+                    <span>베타 계수 (Beta)</span>
+                    <i data-lucide="sliders" style="color: var(--accent-orange); width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricBeta">-</div>
+                <div class="metric-footer">시장 민감도 계수</div>
+            </div>
+
+            <!-- Win Rate -->
+            <div class="metric-card card-winrate">
+                <div class="metric-label-container">
+                    <span>매매 승률 (Win Rate)</span>
+                    <i data-lucide="percent" style="color: #14b8a6; width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricWinRate">-</div>
+                <div class="metric-footer" id="metricProfitFactor">PF: -</div>
+            </div>
+
+            <!-- Trade Count -->
+            <div class="metric-card card-trades">
+                <div class="metric-label-container">
+                    <span>총 매매 횟수</span>
+                    <i data-lucide="shopping-cart" style="color: #6b7280; width: 18px;"></i>
+                </div>
+                <div class="metric-value" id="metricTradeCount">-</div>
+                <div class="metric-footer" id="metricFriction">총 비용: -</div>
+            </div>
+        </section>
+
+        <!-- Charts row -->
+        <section class="charts-row">
+            <!-- Asset Equity Curve Chart -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3 class="chart-title">
+                        <i data-lucide="line-chart" style="color: var(--primary); width: 20px;"></i> 자산 가격 추이 (Equity Curve)
+                    </h3>
+                </div>
+                <div class="chart-container">
+                    <canvas id="equityChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Drawdown Chart -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3 class="chart-title">
+                        <i data-lucide="trending-down" style="color: var(--error); width: 20px;"></i> 자산 낙폭 추이 (Drawdown)
+                    </h3>
+                </div>
+                <div class="chart-container" style="height: 380px;">
+                    <canvas id="drawdownChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Trades & Audit row -->
+        <section class="charts-row" style="grid-template-columns: 3fr 2fr;">
+            <!-- Trades List Table Card -->
+            <div class="section-card">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i data-lucide="list" style="color: var(--info); width: 20px;"></i> 거래 내역 (Trades)
+                    </h3>
+                    <div class="table-filter-bar">
+                        <input type="text" class="filter-input" id="tradeSearchInput" placeholder="종목 코드 검색..." oninput="filterTrades()">
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table id="tradesTable">
+                        <thead>
+                            <tr>
+                                <th>체결 시각</th>
+                                <th>거래 ID</th>
+                                <th>종목</th>
+                                <th>유형</th>
+                                <th>체결 수량</th>
+                                <th>체결 가격</th>
+                                <th>실현 손익</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradesTableBody">
+                            <tr>
+                                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 40px;">조회할 데이터를 선택해 주세요.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Audit details Card -->
+            <div class="section-card">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i data-lucide="shield-check" style="color: var(--success); width: 20px;"></i> MVP0 데이터 감사 결과 (Audit Log)
+                    </h3>
+                </div>
+                <div class="audit-warnings-container" id="auditLogContainer">
+                    <div class="audit-no-warnings">
+                        <i data-lucide="check-circle" style="color: var(--success);"></i>
+                        <span>로딩된 감사 로그가 없습니다.</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- --- Simulate Form Modal --- -->
+    <div class="modal-overlay" id="simModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="modal-title">새 시뮬레이션 설정</h3>
+                <button class="btn-close" onclick="closeSimModal()">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <form id="simForm" onsubmit="runSimulation(event)">
+                <div class="form-group">
+                    <label class="form-label" for="datasetSelect">대상 시장 데이터셋 (Dataset)</label>
+                    <select class="form-control" id="datasetSelect" required>
+                        <!-- Dynamic options -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="configSelect">전략 구성 프리셋 (Config - 선택사항)</label>
+                    <select class="form-control" id="configSelect">
+                        <option value="">-- 프리셋 없음 (기본 1유닛 매수/보유) --</option>
+                        <!-- Dynamic options -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="initialCash">초기 투자 자금 (Initial Cash)</label>
+                    <input type="number" class="form-control" id="initialCash" value="100000" min="1" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="runId">실행 식별 ID (Run ID)</label>
+                    <input type="text" class="form-control" id="runId" value="custom-run" required>
+                </div>
+                <button type="submit" class="btn-submit">시뮬레이터 가동</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- --- Loading Spinner Overlay --- -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <div class="loading-text" style="color: var(--text-main);">Simulation Engine Running...</div>
+    </div>
+
+    <!-- --- Frontend Code Logic --- -->
+    <script>
+        // Global charts storage to manage redraws
+        let equityChartInstance = null;
+        let drawdownChartInstance = null;
+        let currentTrades = [];
+
+        // App Initialisation
+        window.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            loadRuns();
+            loadSimOptions();
+        });
+
+        // Fetch all stored runs and load them into the sidebar
+        async function loadRuns(selectRunId = null) {
+            try {
+                const response = await fetch('/api/runs');
+                const data = await response.json();
+                const runList = document.getElementById('runList');
+                runList.innerHTML = '';
+
+                if (data.runs.length === 0) {
+                    runList.innerHTML = `<li style="color: var(--text-muted); font-size: 0.85rem; padding: 10px; text-align: center;">기존 실행 결과가 없습니다.</li>`;
+                    return;
+                }
+
+                data.runs.forEach((run, index) => {
+                    const li = document.createElement('li');
+                    li.className = `run-item ${selectRunId === run.run_id || (!selectRunId && index === 0) ? 'active' : ''}`;
+                    li.setAttribute('data-id', run.run_id);
+                    li.onclick = () => {
+                        // Deactivate others
+                        document.querySelectorAll('.run-item').forEach(el => el.classList.remove('active'));
+                        li.classList.add('active');
+                        loadRunDetails(run.run_id);
+                    };
+
+                    let badgeClass = 'badge-pass';
+                    if (run.audit_status === 'FAIL') badgeClass = 'badge-fail';
+                    else if (run.audit_status === 'INCONCLUSIVE') badgeClass = 'badge-inc';
+
+                    const retVal = run.total_return !== null ? `${run.total_return.toFixed(2)}%` : '-';
+
+                    li.innerHTML = `
+                        <div class="run-item-header">
+                            <span class="run-item-id">${run.run_id}</span>
+                            <span class="run-item-badge ${badgeClass}">${run.audit_status}</span>
+                        </div>
+                        <div class="run-item-meta">
+                            <span>전략: ${run.strategy}</span>
+                            <span>수익률: ${retVal}</span>
+                        </div>
+                    `;
+                    runList.appendChild(li);
+                });
+
+                // Auto-load details of the first run if none selected
+                if (!selectRunId && data.runs.length > 0) {
+                    loadRunDetails(data.runs[0].run_id);
+                } else if (selectRunId) {
+                    loadRunDetails(selectRunId);
+                }
+            } catch (err) {
+                console.error("Error loading runs:", err);
+            }
+        }
+
+        // Fetch the files of a run and plot/populate
+        async function loadRunDetails(runId) {
+            showLoading(true, "불러오는 중...");
+            try {
+                const response = await fetch(`/api/runs/${runId}`);
+                if (!response.ok) throw new Error("Failed to fetch run details");
+                const data = await response.json();
+
+                // 1. Title and header badges
+                document.getElementById('headerRunId').textContent = data.run_id;
+                document.getElementById('headerStrategy').innerHTML = `<i data-lucide="cpu" style="width: 14px; height: 14px;"></i> 전략: ${data.manifest.strategy_name || '-'}`;
+                document.getElementById('headerDataset').innerHTML = `<i data-lucide="database" style="width: 14px; height: 14px;"></i> 데이터셋: ${data.manifest.dataset || '-'}`;
+                
+                const auditStatus = data.manifest.audit_status || 'Unknown';
+                let badgeClass = 'badge-pass';
+                if (auditStatus === 'FAIL') badgeClass = 'badge-fail';
+                else if (auditStatus === 'INCONCLUSIVE') badgeClass = 'badge-inc';
+                
+                document.getElementById('headerBadgeContainer').innerHTML = `
+                    <span class="run-item-badge ${badgeClass}" style="font-size: 0.95rem; padding: 6px 14px; border-radius: 8px;">감사: ${auditStatus}</span>
+                `;
+
+                // Recreate icons inside header
+                lucide.createIcons();
+
+                // 2. Metrics card mapping
+                const m = data.metrics || {};
+                const summary = data.account_summary || {};
+                
+                document.getElementById('metricTotalReturn').textContent = m.total_return_pct !== undefined ? `${m.total_return_pct.toFixed(2)}%` : '-';
+                document.getElementById('metricCAGR').textContent = m.cagr_pct !== undefined ? `${m.cagr_pct.toFixed(2)}%` : '-';
+                
+                const mddVal = m.max_drawdown_pct !== undefined ? `${m.max_drawdown_pct.toFixed(2)}%` : '-';
+                document.getElementById('metricMDD').textContent = mddVal;
+                
+                document.getElementById('metricSharpe').textContent = m.sharpe_ratio !== undefined ? m.sharpe_ratio.toFixed(2) : '-';
+                
+                document.getElementById('metricAlpha').textContent = (m.benchmark_relative && m.benchmark_relative.alpha_pct !== null) ? `${m.benchmark_relative.alpha_pct.toFixed(2)}%` : 'UNAVAILABLE';
+                document.getElementById('metricBeta').textContent = (m.benchmark_relative && m.benchmark_relative.beta !== null) ? m.benchmark_relative.beta.toFixed(2) : 'UNAVAILABLE';
+                
+                document.getElementById('metricWinRate').textContent = m.win_rate_pct !== undefined ? `${m.win_rate_pct.toFixed(1)}%` : '-';
+                const pfVal = m.profit_factor !== undefined ? (typeof m.profit_factor === 'number' ? m.profit_factor.toFixed(2) : m.profit_factor) : '-';
+                document.getElementById('metricProfitFactor').textContent = `Profit Factor: ${pfVal}`;
+
+                const tradeCount = m.total_trades !== undefined ? m.total_trades : (data.trades ? data.trades.length : 0);
+                document.getElementById('metricTradeCount').textContent = `${tradeCount}회`;
+
+                const totalCost = (summary.total_fees || 0) + (summary.total_slippage || 0);
+                document.getElementById('metricFriction').textContent = `비용: ${totalCost.toFixed(2)} USD (F: ${summary.total_fees?.toFixed(1) || 0} / S: ${summary.total_slippage?.toFixed(1) || 0})`;
+
+                // 3. Render Equity Chart & Drawdown Chart
+                renderCharts(data.equity_curve);
+
+                // 4. Render Trades Table
+                currentTrades = data.trades || [];
+                renderTradesTable(currentTrades);
+
+                // 5. Render Audit details
+                renderAuditLog(data.audit_summary);
+
+            } catch (err) {
+                console.error("Error loading run details:", err);
+                alert("실행 상세 내역을 가져오는데 실패했습니다.");
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // Handle Chart plotting with Chart.js
+        function renderCharts(curveData) {
+            if (!curveData || curveData.length === 0) return;
+
+            const labels = curveData.map(d => d.timestamp.split('T')[0]);
+            const portfolioEquity = curveData.map(d => parseFloat(d.equity));
+            const benchmarkEquity = curveData.map(d => d.benchmark_equity ? parseFloat(d.benchmark_equity) : null);
+
+            // Compute Drawdown percentage curve dynamically for precision
+            let peak = -Infinity;
+            const drawdownCurve = [];
+
+            portfolioEquity.forEach(val => {
+                if (val > peak) peak = val;
+                const dd = peak > 0 ? ((val - peak) / peak) * 100 : 0;
+                drawdownCurve.push(dd);
+            });
+
+            // 1. Portfolio vs Benchmark Chart
+            if (equityChartInstance) equityChartInstance.destroy();
+
+            const ctx1 = document.getElementById('equityChart').getContext('2d');
+            
+            const datasets = [{
+                label: '포트폴리오 자산 (Portfolio)',
+                data: portfolioEquity,
+                borderColor: '#7c3aed',
+                borderWidth: 3,
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                fill: false,
+                tension: 0.1
+            }];
+
+            // Only add benchmark dataset if we have data for it
+            const hasBenchmark = benchmarkEquity.some(v => v !== null);
+            if (hasBenchmark) {
+                datasets.push({
+                    label: '벤치마크 자산 (Benchmark)',
+                    data: benchmarkEquity,
+                    borderColor: '#f59e0b',
+                    borderWidth: 2,
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    fill: false,
+                    tension: 0.1
+                });
+            }
+
+            equityChartInstance = new Chart(ctx1, {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: { color: '#f3f4f6', font: { family: 'Inter', size: 12 } }
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: '#141b27',
+                            titleColor: '#f3f4f6',
+                            bodyColor: '#f3f4f6',
+                            borderColor: '#242d3d',
+                            borderWidth: 1
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#9ca3af', maxTicksLimit: 12 }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#9ca3af' }
+                        }
+                    }
+                }
+            });
+
+            // 2. Drawdown Chart
+            if (drawdownChartInstance) drawdownChartInstance.destroy();
+
+            const ctx2 = document.getElementById('drawdownChart').getContext('2d');
+            const ddGradient = ctx2.createLinearGradient(0, 0, 0, 300);
+            ddGradient.addColorStop(0, 'rgba(239, 68, 68, 0.05)');
+            ddGradient.addColorStop(1, 'rgba(239, 68, 68, 0.35)');
+
+            drawdownChartInstance = new Chart(ctx2, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: '낙폭율 (%)',
+                        data: drawdownCurve,
+                        borderColor: '#ef4444',
+                        borderWidth: 1.5,
+                        backgroundColor: ddGradient,
+                        fill: true,
+                        pointRadius: 0,
+                        pointHoverRadius: 5,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: '#141b27',
+                            titleColor: '#f3f4f6',
+                            bodyColor: '#f3f4f6',
+                            borderColor: '#242d3d',
+                            borderWidth: 1
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#9ca3af', maxTicksLimit: 12 }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+                            ticks: { color: '#9ca3af' },
+                            max: 0
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render rows of trades in the table
+        function renderTradesTable(trades) {
+            const tbody = document.getElementById('tradesTableBody');
+            tbody.innerHTML = '';
+
+            if (trades.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 40px;">거래 내역이 존재하지 않습니다.</td></tr>`;
+                return;
+            }
+
+            trades.forEach(trade => {
+                const tr = document.createElement('tr');
+                const sideText = trade.side === 'buy' ? '매수' : '매도';
+                const sideClass = trade.side === 'buy' ? 'pill-buy' : 'pill-sell';
+                
+                let pnlClass = '';
+                let pnlText = '-';
+                if (trade.realized_pnl && trade.realized_pnl !== '') {
+                    const pnlVal = parseFloat(trade.realized_pnl);
+                    pnlClass = pnlVal > 0 ? 'pnl-positive' : (pnlVal < 0 ? 'pnl-negative' : '');
+                    pnlText = `${pnlVal > 0 ? '+' : ''}${pnlVal.toFixed(2)} USD`;
+                }
+
+                const priceVal = trade.price ? parseFloat(trade.price).toFixed(2) : '-';
+                const qtyVal = trade.quantity ? parseFloat(trade.quantity) : '-';
+
+                tr.innerHTML = `
+                    <td style="font-size: 0.8rem; font-family: monospace;">${trade.timestamp.replace('T', ' ')}</td>
+                    <td style="font-family: monospace;">${trade.trade_id || '-'}</td>
+                    <td style="font-weight: 500;">${trade.symbol || '-'}</td>
+                    <td><span class="pill-side ${sideClass}">${sideText}</span></td>
+                    <td style="text-align: right;">${qtyVal}</td>
+                    <td style="text-align: right;">${priceVal}</td>
+                    <td class="${pnlClass}" style="text-align: right;">${pnlText}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Filter the trades list dynamically in real-time
+        function filterTrades() {
+            const query = document.getElementById('tradeSearchInput').value.toLowerCase().trim();
+            if (!query) {
+                renderTradesTable(currentTrades);
+                return;
+            }
+            const filtered = currentTrades.filter(t => t.symbol && t.symbol.toLowerCase().includes(query));
+            renderTradesTable(filtered);
+        }
+
+        // Render audit alerts
+        function renderAuditLog(auditSummary) {
+            const container = document.getElementById('auditLogContainer');
+            container.innerHTML = '';
+
+            const gaps = auditSummary.gaps || [];
+            const errors = auditSummary.errors || [];
+            
+            if (gaps.length === 0 && errors.length === 0) {
+                container.innerHTML = `
+                    <div class="audit-no-warnings">
+                        <i data-lucide="check-circle" style="color: var(--success);"></i>
+                        <span>감사 실패나 누락 항목 없이 완벽하게 유효합니다!</span>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            if (errors.length > 0) {
+                errors.forEach(err => {
+                    const item = document.createElement('div');
+                    item.className = 'audit-warning-item';
+                    item.style.backgroundColor = 'var(--error-bg)';
+                    item.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                    item.style.color = 'var(--error)';
+                    item.innerHTML = `
+                        <i data-lucide="x-circle" style="width: 16px; height: 16px;"></i>
+                        <span>${err}</span>
+                    `;
+                    container.appendChild(item);
+                });
+            }
+
+            if (gaps.length > 0) {
+                gaps.forEach(gap => {
+                    const item = document.createElement('div');
+                    item.className = 'audit-warning-item';
+                    item.innerHTML = `
+                        <i data-lucide="alert-triangle" style="width: 16px; height: 16px;"></i>
+                        <span>${gap}</span>
+                    `;
+                    container.appendChild(item);
+                });
+            }
+
+            lucide.createIcons();
+        }
+
+        // Loader Toggle Helper
+        function showLoading(show, text = "시뮬레이션 실행 중...") {
+            const overlay = document.getElementById('loadingOverlay');
+            const txt = overlay.querySelector('.loading-text');
+            txt.textContent = text;
+            if (show) {
+                overlay.classList.add('active');
+            } else {
+                overlay.classList.remove('active');
+            }
+        }
+
+        // Modal triggers
+        function openSimModal() {
+            document.getElementById('simModal').classList.add('open');
+        }
+
+        function closeSimModal() {
+            document.getElementById('simModal').classList.remove('open');
+        }
+
+        // Fetch datasets & configs lists to populate form options
+        async function loadSimOptions() {
+            try {
+                // Populate datasets
+                const dsRes = await fetch('/api/datasets');
+                const dsData = await dsRes.json();
+                const dsSelect = document.getElementById('datasetSelect');
+                dsSelect.innerHTML = '';
+                dsData.datasets.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.name;
+                    opt.textContent = `${d.name} (${d.path})`;
+                    dsSelect.appendChild(opt);
+                });
+
+                // Populate configs
+                const confRes = await fetch('/api/configs');
+                const confData = await confRes.json();
+                const confSelect = document.getElementById('configSelect');
+                // Keep the default option
+                confSelect.innerHTML = `<option value="">-- 프리셋 없음 (기본 1유닛 매수/보유) --</option>`;
+                confData.configs.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.name;
+                    opt.textContent = c.name;
+                    confSelect.appendChild(opt);
+                });
+            } catch (err) {
+                console.error("Error loading simulation options:", err);
+            }
+        }
+
+        // Form Submission handler to trigger simulation run via API
+        async function runSimulation(event) {
+            event.preventDefault();
+            const dataset_name = document.getElementById('datasetSelect').value;
+            const config_name = document.getElementById('configSelect').value || null;
+            const initial_cash = document.getElementById('initialCash').value;
+            const run_id = document.getElementById('runId').value;
+
+            closeSimModal();
+            showLoading(true, "시뮬레이션 구동 및 결과 생성 중...");
+
+            try {
+                const response = await fetch('/api/simulate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        dataset_name,
+                        config_name,
+                        initial_cash,
+                        run_id
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || "Simulation run failed");
+                }
+
+                // Success! Re-load list and highlight the new run
+                await loadRuns(data.run_id);
+            } catch (err) {
+                console.error("Error running simulation:", err);
+                alert(`시뮬레이션 실행에 실패했습니다:\n${err.message}`);
+            } finally {
+                showLoading(false);
+            }
+        }
+    </script>
+</body>
+</html>

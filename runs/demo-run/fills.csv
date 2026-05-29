@@ -1,0 +1,4 @@
+fill_id,order_id,timestamp,symbol,side,quantity,fill_price,fee,slippage
+F000001,O000001,2026-01-01T09:30:00,AAA,buy,9,100,0.4500,0.01
+F000002,O000002,2026-01-03T09:30:00,AAA,sell,9,102,0.4590,0.01
+F000003,O000003,2026-01-03T09:30:00,BBB,buy,18,55,0.4950,0.01

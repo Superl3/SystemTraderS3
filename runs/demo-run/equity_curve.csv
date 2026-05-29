@@ -1,0 +1,4 @@
+timestamp,equity,cash,position_value,symbol,position_quantity,last_price,benchmark_price,benchmark_equity,last_prices,position_quantities
+2026-01-01,999.5400,99.5400,900,PORTFOLIO,9,0,100,1000,"{""AAA"":""100"",""BBB"":""50""}","{""AAA"":""9""}"
+2026-01-02,1008.5400,99.5400,909,PORTFOLIO,9,0,101,1010,"{""AAA"":""101"",""BBB"":""50""}","{""AAA"":""9""}"
+2026-01-03,1016.5660,26.5660,990,PORTFOLIO,18,0,103,1030,"{""AAA"":""102"",""BBB"":""55""}","{""BBB"":""18""}"

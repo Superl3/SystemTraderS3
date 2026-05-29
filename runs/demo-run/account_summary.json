@@ -1,0 +1,14 @@
+{
+  "fill_count": 3,
+  "final_cash": "26.5660",
+  "final_equity": "1016.5660",
+  "final_positions": {
+    "BBB": "18"
+  },
+  "initial_cash": "1000",
+  "order_count": 3,
+  "status": "PASS",
+  "total_fees": "1.4040",
+  "total_slippage": "0.03",
+  "trade_count": 3
+}

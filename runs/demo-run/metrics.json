@@ -1,0 +1,29 @@
+{
+  "benchmark_relative": {
+    "alpha_pct": "-161.781479",
+    "benchmark_available": true,
+    "beta": "-0.106724",
+    "gaps": "",
+    "information_ratio": "-18.789079",
+    "risk_free_rate": "0.020000",
+    "sharpe_ratio": "254.990531",
+    "tracking_error_pct": "8.610400"
+  },
+  "cagr_pct": "739.963874",
+  "gaps": [
+    "realized_pnl missing for 2 of 3 trade rows."
+  ],
+  "max_drawdown_pct": "0.000000",
+  "profit_factor": "INF",
+  "realized_trade_count": 1,
+  "schema_version": "mvp6.metrics.v1",
+  "source_files": [
+    "equity_curve.csv",
+    "trades.csv"
+  ],
+  "status": "PASS",
+  "total_number_of_trades": 3,
+  "total_return_pct": "1.703384",
+  "trading_days_per_year": 252,
+  "win_rate_pct": "100.000000"
+}

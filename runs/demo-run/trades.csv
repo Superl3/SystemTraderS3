@@ -1,0 +1,4 @@
+timestamp,trade_id,strategy,side,quantity,price,cost,realized_pnl,symbol,strategy_name,preset_name,order_id,fill_id
+2026-01-01T09:30:00,T000001,market_follow,buy,9,100,0.4600,,AAA,PeriodicFactorWeight,market_follow,O000001,F000001
+2026-01-03T09:30:00,T000002,market_follow,sell,9,102,0.4690,17.0710,AAA,PeriodicFactorWeight,market_follow,O000002,F000002
+2026-01-03T09:30:00,T000003,market_follow,buy,18,55,0.5050,,BBB,PeriodicFactorWeight,market_follow,O000003,F000003

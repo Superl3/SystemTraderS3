@@ -1,0 +1,25 @@
+{
+  "audit_status": "INCONCLUSIVE",
+  "issues": [
+    {
+      "check": "optional_file_missing",
+      "column": null,
+      "file": "benchmark.csv",
+      "message": "Optional file benchmark.csv is missing; future analysis using it is unavailable.",
+      "row": null,
+      "severity": "gap",
+      "value": null
+    },
+    {
+      "check": "optional_file_missing",
+      "column": null,
+      "file": "factor_exposure.csv",
+      "message": "Optional file factor_exposure.csv is missing; future analysis using it is unavailable.",
+      "row": null,
+      "severity": "gap",
+      "value": null
+    }
+  ],
+  "optional_gaps_only": true,
+  "required_generated_outputs_valid": true
+}

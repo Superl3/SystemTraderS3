@@ -1,0 +1,29 @@
+{
+  "dataset_dir": "tests\\fixtures\\valid_multisymbol",
+  "friction": {
+    "fee_rate": "0.0005",
+    "slippage_per_trade": "0.01",
+    "total_fees": "1.4040",
+    "total_slippage": "0.03"
+  },
+  "generated_at_policy": "omitted_for_determinism",
+  "initial_cash": "1000",
+  "input_files": [
+    "AAA_prices.csv",
+    "BBB_prices.csv",
+    "factors.csv",
+    "benchmark_prices.csv"
+  ],
+  "risk_free_rate": "0.02",
+  "run_id": "demo-run",
+  "schema_version": "mvp2.run_artifacts.v1",
+  "simulation_assumptions": [
+    "immediate fills",
+    "configured fee rate",
+    "configured fixed slippage per fill",
+    "one symbol only",
+    "one deterministic strategy selected from a static registry or default legacy strategy"
+  ],
+  "strategy_name": "PeriodicFactorWeight",
+  "warnings": []
+}
