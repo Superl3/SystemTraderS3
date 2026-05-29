@@ -2,7 +2,7 @@
 
 작성일: 2026-05-29
 
-범위: MVP0-MVP9 핵심 구현, 로컬 대시보드, 데모 run artifact, Yahoo Finance 다운로드 스크립트, drop-in US tech 100 synthetic dataset/config까지 포함한 현재 저장소 상태.
+범위: MVP0-MVP9 핵심 구현, 로컬 대시보드, 데모 run artifact, Yahoo Finance 다운로드 스크립트, drop-in US tech 100 synthetic dataset/config, dashboard 전략 form 편집까지 포함한 현재 저장소 상태.
 
 ## 요약
 
@@ -33,8 +33,9 @@ fixture/config
 현재 브랜치:
 
 - `master`
-- `origin/master` 기준 `8eeaac9`에서 drop-in simulator 확장 작업 진행 중
-- 기준 HEAD: `8eeaac9`
+- `origin/master`와 동기화됨
+- 최신 기능 baseline: `ded9eec`
+- 이 리포트 자체가 커밋되면 HEAD는 더 앞선 문서 커밋이 된다.
 
 주요 커밋 흐름:
 
@@ -48,6 +49,8 @@ fixture/config
 - `25e198d` - MVP9 factor ingestion and periodic rebalancing
 - `41dec64` - dashboard and demo run artifacts
 - `8eeaac9` - stability pass for dashboard/downloader/manifest/tests
+- `7054db3` - drop-in historical-style US tech 100 dataset/config/dashboard selection
+- `ded9eec` - dashboard strategy catalog and form-driven config editing
 
 ## 구현된 계층
 
@@ -262,10 +265,13 @@ rtk python -m system_trading_s3.metrics <run_artifact_dir>
 - `/api/runs`가 `dataset_dir`과 `audit_summary.json`의 실제 필드를 읽도록 정리했다.
 - `datasets/`와 `configs/strategies/`의 drop-in object를 dashboard에서 선택할 수 있게 했다.
 - 선택한 전략 config를 dashboard에서 JSON으로 직접 수정해 실행할 수 있게 했다.
+- `/api/strategies`가 registered strategy catalog와 editable parameter metadata를 제공한다.
+- dashboard modal에서 전략을 선택하고 파라미터를 입력하면 run에 사용할 `config_json`이 자동 생성된다.
+- JSON textarea는 advanced override로 남아 있어 파일을 수정하지 않고도 run별 전략 변경이 가능하다.
 
 남은 gap:
 
-- UI 렌더링/브라우저 상호작용 테스트는 없다.
+- 브라우저 수동 smoke는 수행했지만, CI에 묶인 browser automation test는 아직 없다.
 - `index.html`은 CDN에 의존하므로 오프라인 재현성은 없다.
 - dashboard는 같은 `run_id`에 대해 `runs/<run_id>`를 overwrite한다.
 
@@ -323,17 +329,23 @@ rtk python -m system_trading_s3.validate_run runs/demo-run
 rtk python -m system_trading_s3.audit runs/demo-run
 rtk python -m system_trading_s3.metrics runs/demo-run
 rtk python scripts/download_data.py --help
+rtk python -m py_compile dashboard/server.py scripts/generate_simulated_universe.py scripts/download_data.py system_trading_s3/simulate.py
+rtk git diff --check
 ```
 
 결과:
 
-- unit tests: `98 tests OK`
+- unit tests: `99 tests OK`
 - MVP9 sample simulation: `PASS`
 - US tech 100 simulated dataset run: `PASS`
 - demo run validation: `PASS`
 - demo run audit: `INCONCLUSIVE`, optional gap만 있음
 - demo run metrics: `PASS`
 - download script help: optional dependency 없이 실행 가능
+- py_compile: `PASS`
+- diff whitespace check: `PASS`
+- dashboard `/api/strategies`: `PASS`
+- dashboard strategy form browser smoke: `PeriodicFactorWeight` 선택 시 `factor_name`, `rebalance_interval`, `top_k` 입력과 deterministic JSON 생성 확인
 
 ## 아키텍처 강점
 
@@ -359,14 +371,14 @@ rtk python scripts/download_data.py --help
 
 ## 남은 안정화 과제
 
-### P1: Dashboard UI 테스트 부재
+### P1: Dashboard UI 자동화 테스트 부재
 
-현재는 HTTP API smoke test만 있다.
+현재는 HTTP API smoke test와 수동 browser smoke가 있다. 다만 CI에 묶인 browser automation test는 없다.
 
 권장:
 
-- 다음 단계에서 브라우저 기반 수동/자동 smoke test를 추가한다.
-- 최소 확인 항목: run list 표시, demo-run 상세 표시, 새 simulation 실행 버튼.
+- 다음 단계에서 headless/browser 기반 자동 smoke test를 추가한다.
+- 최소 확인 항목: run list 표시, demo-run 상세 표시, 전략 form 생성, 새 simulation 실행 버튼.
 
 ### P1: Historical downloader 실사용 검증 필요
 
