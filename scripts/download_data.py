@@ -7,6 +7,8 @@ optional packages `yfinance` and `pandas` only when an actual download is run.
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,7 +35,18 @@ def main(argv: list[str] | None = None) -> int:
         default="tests/fixtures/historical_data",
         help="Directory where simulator-ready CSV files will be written.",
     )
+    parser.add_argument(
+        "--offline-smoke",
+        action="store_true",
+        help="Write a tiny deterministic simulator-ready dataset without network or optional dependencies.",
+    )
     args = parser.parse_args(argv)
+
+    output_path = Path(args.output_dir)
+    if args.offline_smoke:
+        _write_offline_smoke_dataset(output_path)
+        print(f"wrote offline smoke dataset: {output_path.resolve()}")
+        return 0
 
     try:
         import pandas as pd
@@ -47,7 +60,6 @@ def main(argv: list[str] | None = None) -> int:
 
     symbols = [symbol.strip() for symbol in args.symbols.split(",") if symbol.strip()]
     benchmark = args.benchmark.strip()
-    output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     print("SystemTradingS3 Yahoo Finance downloader")
@@ -136,6 +148,48 @@ def _build_momentum_factors(pd: Any, price_frames: list[Any]) -> Any:
 
 def _safe_file_stem(symbol: str) -> str:
     return "".join(char for char in symbol if char.isalnum() or char in "-_") or "symbol"
+
+
+def _write_offline_smoke_dataset(output_path: Path) -> None:
+    output_path.mkdir(parents=True, exist_ok=True)
+    timestamps = ["2024-01-02T00:00:00", "2024-01-03T00:00:00", "2024-01-04T00:00:00"]
+    symbols = ["SMOKE_A", "SMOKE_B"]
+
+    with (output_path / "market_prices.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(["timestamp", "symbol", "price"])
+        for index, timestamp in enumerate(timestamps):
+            writer.writerow([timestamp, "SMOKE_A", f"{100 + index * 2:.2f}"])
+            writer.writerow([timestamp, "SMOKE_B", f"{50 + index:.2f}"])
+
+    with (output_path / "benchmark_prices.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(["timestamp", "symbol", "price"])
+        for index, timestamp in enumerate(timestamps):
+            writer.writerow([timestamp, "SMOKE_BENCH", f"{100 + index:.2f}"])
+
+    with (output_path / "factors.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(["timestamp", "symbol", "factor_name", "factor_value"])
+        for index, timestamp in enumerate(timestamps):
+            writer.writerow([timestamp, "SMOKE_A", "momentum", f"{0.10 + index * 0.01:.4f}"])
+            writer.writerow([timestamp, "SMOKE_B", "momentum", f"{0.05 + index * 0.01:.4f}"])
+
+    manifest = {
+        "data_policy": "offline deterministic downloader contract smoke; not real market data",
+        "dataset_id": "offline_smoke",
+        "files": ["market_prices.csv", "benchmark_prices.csv", "factors.csv"],
+        "schema_version": "download_data.offline_smoke.v1",
+        "symbol_count": len(symbols),
+        "symbols": symbols,
+        "timestamp_start": timestamps[0],
+        "timestamp_end": timestamps[-1],
+    }
+    (output_path / "dataset_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 if __name__ == "__main__":

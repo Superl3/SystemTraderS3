@@ -60,6 +60,23 @@ class DashboardApiTests(unittest.TestCase):
         self.assertEqual({"factor_name", "rebalance_interval", "top_k"}, periodic_param_names)
         self.assertEqual("momentum", strategies["PeriodicFactorWeight"]["params"][0]["default"])
 
+    def test_dashboard_serves_strategy_form_contract(self) -> None:
+        with self._running_server() as base_url:
+            html = self._get_text(f"{base_url}/")
+
+        required_fragments = [
+            'id="strategySelect"',
+            'id="strategyDescription"',
+            'id="strategyParamFields"',
+            'id="strategyConfigJson"',
+            "fetch('/api/strategies')",
+            "function populateStrategySelect()",
+            "function syncStrategyFormToJson()",
+            "function buildConfigFromStrategyForm()",
+        ]
+        for fragment in required_fragments:
+            self.assertIn(fragment, html)
+
     def test_dashboard_simulate_endpoint_exports_and_metrics_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dashboard_server.RUNS_DIR = Path(tmp) / "runs"
@@ -129,6 +146,11 @@ class DashboardApiTests(unittest.TestCase):
             self.assertEqual(200, response.status)
             return json.loads(response.read().decode("utf-8"))
 
+    def _get_text(self, url: str) -> str:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            self.assertEqual(200, response.status)
+            return response.read().decode("utf-8")
+
     def _post_json(self, url: str, payload: dict) -> dict:
         request = urllib.request.Request(
             url,
@@ -153,6 +175,38 @@ class DownloadDataScriptTests(unittest.TestCase):
         )
         self.assertEqual(0, completed.returncode)
         self.assertIn("Download Yahoo Finance prices", completed.stdout)
+
+    def test_download_script_offline_smoke_outputs_simulator_ready_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_dir = Path(tmp) / "offline_smoke"
+            download = subprocess.run(
+                [sys.executable, "scripts/download_data.py", "--offline-smoke", "--output-dir", str(dataset_dir)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            simulate = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "system_trading_s3.simulate",
+                    str(dataset_dir),
+                    "--config",
+                    "tests/fixtures/sample_config.json",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(0, download.returncode, download.stderr)
+        self.assertIn("wrote offline smoke dataset", download.stdout)
+        self.assertEqual(0, simulate.returncode, simulate.stderr)
+        self.assertIn("SIMULATION STATUS: PASS", simulate.stdout)
 
 
 if __name__ == "__main__":

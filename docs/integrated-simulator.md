@@ -59,6 +59,13 @@ Regenerate it with:
 rtk python scripts/generate_simulated_universe.py --output-dir datasets/us_tech_100_simulated
 ```
 
+Validate the downloader output contract without network or optional dependencies:
+
+```powershell
+rtk python scripts/download_data.py --offline-smoke --output-dir "$env:TEMP\systemtraders3-offline-smoke"
+rtk python -m system_trading_s3.simulate "$env:TEMP\systemtraders3-offline-smoke" --config tests/fixtures/sample_config.json
+```
+
 ## Drop-In Strategy Config
 
 Place strategy configs under:
@@ -145,4 +152,5 @@ These boundaries are intentionally file-based so objects can be copied, replaced
 - The Yahoo downloader remains optional and depends on `yfinance` and `pandas`.
 - Dashboard UI uses CDN assets.
 - Metrics are portfolio-level only.
+- Metrics report a gap when annualized values are based on fewer than 20 equity rows.
 - Factor reporting and loss classification are not implemented yet.

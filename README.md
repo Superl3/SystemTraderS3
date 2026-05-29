@@ -39,6 +39,9 @@ rtk python -m system_trading_s3.validate_run $run
 
 # MVP5/MVP6: write deterministic baseline and benchmark-relative metrics
 rtk python -m system_trading_s3.metrics $run
+
+# Downloader contract smoke without network or optional dependencies
+rtk python scripts/download_data.py --offline-smoke --output-dir "$env:TEMP\systemtraders3-offline-smoke"
 ```
 
 ## Interactive Dashboard
@@ -133,7 +136,8 @@ MVP5/MVP6 metrics:
 - writes deterministic `metrics.json`;
 - calculates total return, CAGR using equity row intervals with 252 trading days/year, max drawdown, realized-PnL win rate, profit factor, and trade counts;
 - calculates alpha, beta, Sharpe ratio, tracking error, and information ratio when benchmark equity is available;
-- reports `UNAVAILABLE` and gaps rather than inferring missing realized PnL.
+- reports `UNAVAILABLE` and gaps rather than inferring missing realized PnL;
+- reports a sample-size gap when annualized metrics are calculated from fewer than 20 equity rows.
 
 ## Audit Status
 

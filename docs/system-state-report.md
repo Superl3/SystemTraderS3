@@ -369,34 +369,43 @@ rtk git diff --check
 
    factor data가 `MarketState`로 흐르고, `PeriodicFactorWeight`가 주기적 cross-sectional factor rebalancing을 증명한다.
 
-## 남은 안정화 과제
+## 안정화 완료 내역
 
-### P1: Dashboard UI 자동화 테스트 부재
+### Dashboard UI 자동 계약 테스트
 
-현재는 HTTP API smoke test와 수동 browser smoke가 있다. 다만 CI에 묶인 browser automation test는 없다.
+기존에는 HTTP API smoke와 수동 browser smoke만 있었다. 현재는 CI에서 dashboard HTML/JS 계약도 검사한다.
 
-권장:
+닫힌 항목:
 
-- 다음 단계에서 headless/browser 기반 자동 smoke test를 추가한다.
-- 최소 확인 항목: run list 표시, demo-run 상세 표시, 전략 form 생성, 새 simulation 실행 버튼.
+- `/api/strategies`가 registered strategy catalog를 반환하는지 검사한다.
+- `/` HTML에 `strategySelect`, `strategyParamFields`, `strategyConfigJson`가 포함되는지 검사한다.
+- form-driven JSON 생성 함수가 HTML payload에서 빠지지 않는지 검사한다.
 
-### P1: Historical downloader 실사용 검증 필요
+### Downloader 출력 계약 smoke
 
-현재는 `--help`와 코드 컴파일만 검증했다.
+현재 환경에는 `yfinance`가 없으므로 실제 Yahoo 네트워크 다운로드를 CI 안정화 조건으로 삼지 않는다. 대신 stdlib-only `--offline-smoke`가 downloader의 simulator-ready 출력 계약을 검증한다.
 
-권장:
+닫힌 항목:
 
-- optional dependency가 있는 환경에서 작은 날짜 범위로 실제 다운로드 smoke test를 수행한다.
-- 생성된 dataset이 `simulate`에 바로 들어가는지 확인한다.
+- `scripts/download_data.py --offline-smoke --output-dir <dir>`가 `market_prices.csv`, `benchmark_prices.csv`, `factors.csv`, `dataset_manifest.json`을 생성한다.
+- 생성된 dataset이 `system_trading_s3.simulate`에 바로 들어가 `PASS`가 되는지 테스트한다.
+- 실제 Yahoo 다운로드는 optional dependency와 네트워크가 있는 환경에서 수행하는 별도 hardening 후보로 남긴다.
 
-### P2: Metrics 오해 가능성
+### Metrics sample-size gap
 
-작은 fixture의 연율화 지표는 과장되어 보일 수 있다.
+작은 fixture의 연율화 지표는 과장되어 보일 수 있다. 현재 metrics는 equity row가 20개 미만이면 gap을 기록한다.
 
-권장:
+닫힌 항목:
 
-- equity row 수가 적을 때 warning/gap을 표시한다.
-- 모든 문구는 profit-neutral하게 유지한다.
+- `metrics.json`의 `gaps`에 sample-size warning이 기록된다.
+- CLI output의 `GAPS` 섹션에 같은 warning이 표시된다.
+- profit-neutral 문구를 유지한다.
+
+## 추가 hardening 후보
+
+- 실제 Yahoo Finance 다운로드 smoke: optional `yfinance`, `pandas`, 네트워크가 준비된 환경에서만 수행한다.
+- Headless browser E2E: dashboard run 생성 버튼까지 실제 브라우저에서 누르는 CI test.
+- Offline dashboard bundle: CDN 의존성을 제거해야 할 경우 별도 asset packaging이 필요하다.
 
 ## 다음 방향성 논의 후보
 

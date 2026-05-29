@@ -114,6 +114,7 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual("2.000000", payload["profit_factor"])
         self.assertNotEqual("UNAVAILABLE", payload["cagr_pct"])
         self.assertEqual("UNAVAILABLE", payload["benchmark_relative"]["alpha_pct"])
+        self.assertIn("annualized metrics may be unstable because equity_curve has fewer than 20 rows.", payload["gaps"])
 
     def test_benchmark_relative_metrics_calculate_from_equity_columns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

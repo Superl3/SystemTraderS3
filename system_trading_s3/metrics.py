@@ -21,6 +21,7 @@ METRICS_SCHEMA_VERSION = "mvp6.metrics.v1"
 METRICS_FILE_NAME = "metrics.json"
 TRADING_DAYS_PER_YEAR = Decimal("252")
 METRIC_QUANT = Decimal("0.000001")
+MIN_ANNUALIZED_SAMPLE_ROWS = 20
 
 
 class MetricsError(Exception):
@@ -56,6 +57,7 @@ def calculate_metrics(run_artifact_dir: Path | str) -> MetricsResult:
     total_return = _total_return_pct(equity_rows, gaps)
     cagr = _cagr_pct(equity_rows, gaps)
     max_drawdown = _max_drawdown_pct(equity_rows, gaps)
+    _append_sample_size_gaps(equity_rows, gaps)
     win_rate, profit_factor = _trade_outcome_metrics(
         realized_pnls=realized_pnls,
         total_trade_count=total_trade_count,
@@ -274,6 +276,15 @@ def _max_drawdown_pct(equity_rows: list[EquityMetricRow], gaps: list[str]) -> De
         if drawdown > max_drawdown:
             max_drawdown = drawdown
     return max_drawdown
+
+
+def _append_sample_size_gaps(equity_rows: list[EquityMetricRow], gaps: list[str]) -> None:
+    row_count = len(equity_rows)
+    if 1 < row_count < MIN_ANNUALIZED_SAMPLE_ROWS:
+        gaps.append(
+            "annualized metrics may be unstable because equity_curve has fewer than "
+            f"{MIN_ANNUALIZED_SAMPLE_ROWS} rows."
+        )
 
 
 def _trade_outcome_metrics(
