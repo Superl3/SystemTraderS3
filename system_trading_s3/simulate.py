@@ -10,7 +10,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -73,6 +73,17 @@ class Order:
     symbol: str
     quantity: Decimal
     price: Decimal
+
+
+WeightValue = Decimal | int | float | str
+
+
+@dataclass(frozen=True)
+class TargetWeights:
+    weights: dict[str, WeightValue]
+
+
+StrategyIntent = list[Order] | TargetWeights | dict[str, WeightValue]
 
 
 @dataclass(frozen=True)
@@ -167,7 +178,7 @@ class SimulationConfig:
 class Strategy(Protocol):
     name: str
 
-    def on_data(self, market_state: MarketState, account_state: AccountState) -> list[Order]:
+    def on_data(self, market_state: MarketState, account_state: AccountState) -> StrategyIntent:
         ...
 
     def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
@@ -330,6 +341,89 @@ class ExecutionSimulator:
         )
 
 
+class PortfolioRebalancer:
+    """Convert target weights into deterministic integer market orders."""
+
+    def __init__(self, friction: FrictionModel = FrictionModel()) -> None:
+        if friction.fee_rate < 0 or friction.slippage_per_trade < 0:
+            raise SimulationInputError("friction values must be nonnegative.")
+        self.friction = friction
+
+    def orders_for_target_weights(
+        self,
+        target_weights: TargetWeights | dict[str, WeightValue],
+        account_state: AccountState,
+        market_state: MarketState,
+    ) -> list[Order]:
+        prices = _state_prices(market_state)
+        weights = _normalize_target_weights(target_weights, prices)
+        equity = _portfolio_equity(account_state.cash, account_state.positions, prices)
+        if equity <= 0:
+            return []
+
+        cash = account_state.cash
+        positions = dict(sorted(account_state.positions.items()))
+        orders: list[Order] = []
+
+        for symbol in sorted(positions):
+            if symbol not in prices:
+                continue
+            price = prices[symbol]
+            quantity = positions.get(symbol, ZERO)
+            target_value = equity * weights.get(symbol, ZERO)
+            current_value = quantity * price
+            if quantity <= 0 or current_value <= target_value:
+                continue
+            sell_quantity = min(quantity, _floor_decimal((current_value - target_value) / price))
+            if sell_quantity <= 0:
+                continue
+            orders.append(Order(side="sell", symbol=symbol, quantity=sell_quantity, price=price))
+            cash += self._sell_proceeds(sell_quantity, price)
+            remaining = quantity - sell_quantity
+            if remaining == 0:
+                positions.pop(symbol, None)
+            else:
+                positions[symbol] = remaining
+
+        for symbol in sorted(weights):
+            if symbol not in prices:
+                continue
+            price = prices[symbol]
+            target_value = equity * weights[symbol]
+            current_value = positions.get(symbol, ZERO) * price
+            if target_value <= current_value:
+                continue
+            desired_quantity = _floor_decimal((target_value - current_value) / price)
+            if desired_quantity <= 0:
+                continue
+            affordable_quantity = self._max_affordable_quantity(cash, price)
+            buy_quantity = min(desired_quantity, affordable_quantity)
+            if buy_quantity <= 0:
+                continue
+            orders.append(Order(side="buy", symbol=symbol, quantity=buy_quantity, price=price))
+            cash -= self._buy_cost(buy_quantity, price)
+            positions[symbol] = positions.get(symbol, ZERO) + buy_quantity
+
+        return orders
+
+    def _buy_cost(self, quantity: Decimal, price: Decimal) -> Decimal:
+        notional = quantity * price
+        return notional + (notional * self.friction.fee_rate) + self.friction.slippage_per_trade
+
+    def _sell_proceeds(self, quantity: Decimal, price: Decimal) -> Decimal:
+        notional = quantity * price
+        return notional - (notional * self.friction.fee_rate) - self.friction.slippage_per_trade
+
+    def _max_affordable_quantity(self, cash: Decimal, price: Decimal) -> Decimal:
+        if price <= 0:
+            raise SimulationExecutionError("Cannot rebalance using nonpositive prices.")
+        cash_after_fixed_cost = cash - self.friction.slippage_per_trade
+        if cash_after_fixed_cost <= 0:
+            return ZERO
+        per_share_cost = price * (ONE_UNIT + self.friction.fee_rate)
+        return _floor_decimal(cash_after_fixed_cost / per_share_cost)
+
+
 class BuyAndHoldOneUnitStrategy:
     name = STRATEGY_NAME
 
@@ -436,8 +530,31 @@ class MovingAverageCrossStrategy:
         return []
 
 
+class EqualWeightRebalanceStrategy:
+    name = "EqualWeightRebalance"
+
+    def __init__(self) -> None:
+        self._emitted = False
+
+    def on_data(self, market_state: MarketState, account_state: AccountState) -> StrategyIntent:
+        del account_state
+        if self._emitted:
+            return []
+        prices = _state_prices(market_state)
+        if not prices:
+            return []
+        self._emitted = True
+        weight = ONE_UNIT / Decimal(len(prices))
+        return TargetWeights({symbol: weight for symbol in sorted(prices)})
+
+    def on_finish(self, final_event: MarketPriceEvent, account: SimulatedAccount) -> list[Order]:
+        del final_event, account
+        return []
+
+
 STRATEGY_REGISTRY = {
     BuyAndHoldStrategy.name: BuyAndHoldStrategy,
+    EqualWeightRebalanceStrategy.name: EqualWeightRebalanceStrategy,
     MovingAverageCrossStrategy.name: MovingAverageCrossStrategy,
 }
 
@@ -456,6 +573,7 @@ class SimulationEngine:
         self.account = account
         self.strategy = strategy
         self.execution = execution
+        self.rebalancer = PortfolioRebalancer(execution.friction)
         self.order_count = 0
         self.orders: list[OrderRecord] = []
         self.fills: list[Fill] = []
@@ -468,10 +586,18 @@ class SimulationEngine:
 
         for event in events:
             self.last_prices.update(_event_prices(event))
-            self._execute_orders(event, self.strategy.on_data(_market_state(event), _account_state(self.account)))
+            market_state = _market_state(event)
+            self._execute_intent(event, market_state, self.strategy.on_data(market_state, _account_state(self.account)))
             if event == final_event:
                 self._execute_orders(final_event, self.strategy.on_finish(final_event, self.account))
             self._record_account_snapshot(event)
+
+    def _execute_intent(self, event: MarketPriceEvent, market_state: MarketState, intent: StrategyIntent) -> None:
+        if isinstance(intent, TargetWeights) or isinstance(intent, dict):
+            orders = self.rebalancer.orders_for_target_weights(intent, _account_state(self.account), market_state)
+        else:
+            orders = intent
+        self._execute_orders(event, orders)
 
     def _execute_orders(self, event: MarketPriceEvent, orders: list[Order]) -> None:
         for order in orders:
@@ -729,6 +855,9 @@ def create_strategy(strategy_name: str, strategy_params: dict[str, object]) -> S
         quantity = _decimal_param(strategy_params, "quantity", ONE_UNIT)
         target_symbol = _optional_str_param(strategy_params, "target_symbol")
         return BuyAndHoldStrategy(quantity=quantity, target_symbol=target_symbol)
+    if strategy_class is EqualWeightRebalanceStrategy:
+        _reject_unknown_params(strategy_params, set())
+        return EqualWeightRebalanceStrategy()
     if strategy_class is MovingAverageCrossStrategy:
         short_window = _int_param(strategy_params, "short_window", 2)
         long_window = _int_param(strategy_params, "long_window", 3)
@@ -1110,6 +1239,52 @@ def _target_prices(prices: dict[str, Decimal], target_symbol: str | None) -> dic
     return {target_symbol: prices[target_symbol]}
 
 
+def _portfolio_equity(cash: Decimal, positions: dict[str, Decimal], prices: dict[str, Decimal]) -> Decimal:
+    return cash + sum((quantity * prices[symbol] for symbol, quantity in positions.items() if symbol in prices), ZERO)
+
+
+def _normalize_target_weights(
+    target_weights: TargetWeights | dict[str, WeightValue],
+    prices: dict[str, Decimal],
+) -> dict[str, Decimal]:
+    raw_weights = target_weights.weights if isinstance(target_weights, TargetWeights) else target_weights
+    weights: dict[str, Decimal] = {}
+    for symbol, raw_weight in raw_weights.items():
+        if symbol not in prices:
+            raise SimulationExecutionError(f"Target weight references unknown symbol: {symbol}.")
+        weight = _parse_weight(symbol, raw_weight)
+        if weight < 0:
+            raise SimulationExecutionError(f"Target weight for {symbol} must be nonnegative.")
+        if weight != 0:
+            weights[symbol] = weight
+    total_weight = sum(weights.values(), ZERO)
+    if total_weight > ONE_UNIT:
+        raise SimulationExecutionError("Target weights must sum to 1.0 or less.")
+    return dict(sorted(weights.items()))
+
+
+def _parse_weight(symbol: str, value: WeightValue) -> Decimal:
+    if isinstance(value, bool):
+        raise SimulationExecutionError(f"Target weight for {symbol} must be numeric.")
+    if isinstance(value, (int, float)):
+        value = str(value)
+    if isinstance(value, Decimal):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = audit._parse_decimal(value)
+        if parsed is None:
+            raise SimulationExecutionError(f"Target weight for {symbol} must be finite.")
+    else:
+        raise SimulationExecutionError(f"Target weight for {symbol} must be numeric.")
+    if not parsed.is_finite():
+        raise SimulationExecutionError(f"Target weight for {symbol} must be finite.")
+    return parsed
+
+
+def _floor_decimal(value: Decimal) -> Decimal:
+    return value.to_integral_value(rounding=ROUND_FLOOR)
+
+
 def _decimal_param(params: dict[str, object], key: str, default: Decimal) -> Decimal:
     value = params.get(key, str(default))
     if isinstance(value, int):
@@ -1129,6 +1304,12 @@ def _optional_str_param(params: dict[str, object], key: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise SimulationConfigError(f"Strategy parameter {key} must be a non-empty string when provided.")
     return value.strip()
+
+
+def _reject_unknown_params(params: dict[str, object], allowed_keys: set[str]) -> None:
+    unknown = sorted(key for key in params if key not in allowed_keys)
+    if unknown:
+        raise SimulationConfigError(f"Unknown strategy parameter(s): {', '.join(unknown)}.")
 
 
 def _parse_friction_config(value: object) -> FrictionModel:

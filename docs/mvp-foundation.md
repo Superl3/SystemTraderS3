@@ -111,7 +111,9 @@ Completed MVP6: engine-integrated benchmark logging and benchmark-relative metri
 
 Completed MVP7: multi-symbol market ingestion and portfolio state accounting.
 
-Candidate MVP8: factor exposure inputs and factor-relative metrics using explicit target series.
+Completed MVP8: target-weight strategy intents and integer-share portfolio rebalancing.
+
+Candidate MVP9: factor exposure inputs and factor-relative metrics using explicit target series.
 
 Later phase: richer risk-adjusted metrics.
 
@@ -128,8 +130,9 @@ Later phase: small-capital live validation criteria only.
 ## Current Limitations
 
 - Default no-config behavior still uses the legacy `buy_and_hold_one_unit` strategy.
-- Config-driven runs support only `BuyAndHold` and `MovingAverageCross`.
-- Strategy behavior is portfolio-capable but still simple: current built-ins either act across available symbols or use an optional `target_symbol`.
+- Config-driven runs support only `BuyAndHold`, `MovingAverageCross`, and `EqualWeightRebalance`.
+- Strategy behavior is portfolio-capable but still simple: current built-ins either act across available symbols, use an optional `target_symbol`, or emit one-shot equal weights.
+- Rebalancing uses integer shares, deterministic symbol ordering, and no optimizer.
 - Immediate fills only.
 - Friction is deterministic only: percentage fee plus fixed slippage per fill.
 - Benchmark synchronization is deterministic forward-fill only.

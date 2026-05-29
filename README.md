@@ -26,7 +26,7 @@ rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete
 # MVP4: run a configured strategy
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_complete --config tests/fixtures/sample_config.json
 
-# MVP7: run a multi-symbol portfolio fixture
+# MVP7/MVP8: run a multi-symbol target-weight rebalance fixture
 rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json
 
 # MVP2: export deterministic run artifacts
@@ -53,6 +53,7 @@ All commands are local and simulated. `audit` and `validate_run` are read-only. 
 - MVP5 completed: deterministic transaction friction and post-run baseline metrics.
 - MVP6 completed: engine-integrated benchmark logging and benchmark-relative metrics.
 - MVP7 completed: multi-symbol market ingestion and portfolio state accounting.
+- MVP8 completed: target-weight strategy intents and integer-share portfolio rebalancing.
 
 ## MVP Responsibilities
 
@@ -76,8 +77,16 @@ MVP4 config-driven execution:
 - reads `initial_cash`, `strategy_name`, and `strategy_params`;
 - optionally reads `friction.fee_rate` and `friction.slippage_per_trade`;
 - optionally reads `risk_free_rate` for Sharpe ratio calculations;
-- supports a static registry with `BuyAndHold` and `MovingAverageCross`;
-- keeps strategies as order-intent generators while the engine owns account mutation.
+- supports a static registry with `BuyAndHold`, `MovingAverageCross`, and `EqualWeightRebalance`;
+- allows strategies to emit explicit orders or target weights;
+- keeps execution sizing, fill routing, friction accounting, and account mutation inside the engine.
+
+MVP8 rebalancing:
+
+- converts target weights into deterministic integer-share market orders;
+- sells alphabetically before buying alphabetically;
+- accounts for configured fee and slippage when checking affordability;
+- never intentionally generates orders that would make simulated cash negative.
 
 MVP2 export:
 

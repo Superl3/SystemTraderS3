@@ -1,10 +1,8 @@
 {
   "initial_cash": "1000",
-  "strategy_name": "BuyAndHold",
+  "strategy_name": "EqualWeightRebalance",
   "risk_free_rate": 0.02,
-  "strategy_params": {
-    "quantity": "1"
-  },
+  "strategy_params": {},
   "friction": {
     "fee_rate": 0.0005,
     "slippage_per_trade": "0.01"

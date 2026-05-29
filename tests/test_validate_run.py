@@ -96,12 +96,12 @@ class ValidateRunTests(unittest.TestCase):
             result = validate_run.validate_run_artifacts(run_dir)
         self.assertEqual(validate_run.PASS, result.status)
         self.assertEqual("mvp5-test", result.run_id)
-        self.assertEqual("BuyAndHold", result.strategy_name)
+        self.assertEqual("EqualWeightRebalance", result.strategy_name)
         self.assertEqual(1, result.order_count)
         self.assertEqual(1, result.fill_count)
-        self.assertEqual(Decimal("899.94"), result.replayed_final_cash)
-        self.assertEqual({"SIM": Decimal("1")}, result.replayed_final_positions)
-        self.assertEqual(Decimal("1001.9400"), result.replayed_final_equity)
+        self.assertEqual(Decimal("99.54"), result.replayed_final_cash)
+        self.assertEqual({"SIM": Decimal("9")}, result.replayed_final_positions)
+        self.assertEqual(Decimal("1017.5400"), result.replayed_final_equity)
 
     def test_validate_run_passes_on_multisymbol_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,9 +111,9 @@ class ValidateRunTests(unittest.TestCase):
         self.assertEqual("mvp7-test", result.run_id)
         self.assertEqual(2, result.order_count)
         self.assertEqual(2, result.fill_count)
-        self.assertEqual(Decimal("849.9050"), result.replayed_final_cash)
-        self.assertEqual({"AAA": Decimal("1"), "BBB": Decimal("1")}, result.replayed_final_positions)
-        self.assertEqual(Decimal("1006.9050"), result.replayed_final_equity)
+        self.assertEqual(Decimal("49.5050"), result.replayed_final_cash)
+        self.assertEqual({"AAA": Decimal("5"), "BBB": Decimal("9")}, result.replayed_final_positions)
+        self.assertEqual(Decimal("1054.5050"), result.replayed_final_equity)
 
     def test_missing_required_artifact_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

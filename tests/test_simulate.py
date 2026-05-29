@@ -199,7 +199,7 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual({"AAA": Decimal("101"), "BBB": Decimal("50")}, events[1].prices)
         self.assertEqual({"AAA": Decimal("102"), "BBB": Decimal("55")}, events[2].prices)
 
-    def test_configured_buy_and_hold_handles_multisymbol_portfolio(self) -> None:
+    def test_equal_weight_rebalance_handles_multisymbol_portfolio(self) -> None:
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
         strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
         result = simulate.run_simulation(
@@ -212,10 +212,10 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(simulate.PASS, result.status)
         self.assertEqual(2, result.order_count)
         self.assertEqual(2, result.fill_count)
-        self.assertEqual(Decimal("849.9050"), result.final_cash)
-        self.assertEqual({"AAA": Decimal("1"), "BBB": Decimal("1")}, result.final_positions)
-        self.assertEqual(Decimal("1006.9050"), result.final_equity)
-        self.assertEqual(Decimal("157"), result.equity_curve[-1].position_value)
+        self.assertEqual(Decimal("49.5050"), result.final_cash)
+        self.assertEqual({"AAA": Decimal("5"), "BBB": Decimal("9")}, result.final_positions)
+        self.assertEqual(Decimal("1054.5050"), result.final_equity)
+        self.assertEqual(Decimal("1005"), result.equity_curve[-1].position_value)
         self.assertEqual({"AAA": Decimal("102"), "BBB": Decimal("55")}, result.equity_curve[-1].prices)
 
     def test_initial_cash_default_and_override_work(self) -> None:
@@ -226,13 +226,13 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(Decimal("1002"), override_result.final_cash)
 
     def test_strategy_registry_exposes_configured_strategies(self) -> None:
-        self.assertEqual({"BuyAndHold", "MovingAverageCross"}, set(simulate.STRATEGY_REGISTRY))
+        self.assertEqual({"BuyAndHold", "EqualWeightRebalance", "MovingAverageCross"}, set(simulate.STRATEGY_REGISTRY))
 
     def test_load_simulation_config_parses_sample_config(self) -> None:
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
         self.assertEqual(Decimal("1000"), config.initial_cash)
-        self.assertEqual("BuyAndHold", config.strategy_name)
-        self.assertEqual({"quantity": "1"}, config.strategy_params)
+        self.assertEqual("EqualWeightRebalance", config.strategy_name)
+        self.assertEqual({}, config.strategy_params)
         self.assertEqual(Decimal("0.0005"), config.friction.fee_rate)
         self.assertEqual(Decimal("0.01"), config.friction.slippage_per_trade)
         self.assertEqual(Decimal("0.02"), config.risk_free_rate)
@@ -277,6 +277,49 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual("sell", sell_orders[0].side)
         self.assertEqual(Decimal("1"), sell_orders[0].quantity)
 
+    def test_equal_weight_rebalance_strategy_outputs_target_weights(self) -> None:
+        strategy = simulate.create_strategy("EqualWeightRebalance", {})
+        state = simulate.MarketState(
+            timestamp=simulate.audit._parse_timestamp("2026-01-01T09:30:00", "datetime"),
+            symbol="AAA",
+            price=Decimal("100"),
+            prices={"AAA": Decimal("100"), "BBB": Decimal("50")},
+        )
+        intent = strategy.on_data(state, simulate.AccountState(cash=Decimal("1000"), positions={}))
+        self.assertIsInstance(intent, simulate.TargetWeights)
+        self.assertEqual({"AAA": Decimal("0.5"), "BBB": Decimal("0.5")}, intent.weights)
+        self.assertEqual([], strategy.on_data(state, simulate.AccountState(cash=Decimal("1000"), positions={})))
+
+    def test_portfolio_rebalancer_respects_insufficient_cash(self) -> None:
+        rebalancer = simulate.PortfolioRebalancer(
+            simulate.FrictionModel(fee_rate=Decimal("0.0005"), slippage_per_trade=Decimal("0.01"))
+        )
+        orders = rebalancer.orders_for_target_weights(
+            simulate.TargetWeights({"AAA": Decimal("1")}),
+            simulate.AccountState(cash=Decimal("99"), positions={}),
+            simulate.MarketState(
+                timestamp=simulate.audit._parse_timestamp("2026-01-01T09:30:00", "datetime"),
+                symbol="AAA",
+                price=Decimal("100"),
+                prices={"AAA": Decimal("100")},
+            ),
+        )
+        self.assertEqual([], orders)
+
+    def test_portfolio_rebalancer_sells_before_buying_new_targets(self) -> None:
+        rebalancer = simulate.PortfolioRebalancer()
+        orders = rebalancer.orders_for_target_weights(
+            simulate.TargetWeights({"AAA": Decimal("0.5"), "BBB": Decimal("0.5")}),
+            simulate.AccountState(cash=Decimal("0"), positions={"AAA": Decimal("10")}),
+            simulate.MarketState(
+                timestamp=simulate.audit._parse_timestamp("2026-01-01T09:30:00", "datetime"),
+                symbol="AAA",
+                price=Decimal("100"),
+                prices={"AAA": Decimal("100"), "BBB": Decimal("50")},
+            ),
+        )
+        self.assertEqual([("sell", "AAA", Decimal("5")), ("buy", "BBB", Decimal("10"))], [(order.side, order.symbol, order.quantity) for order in orders])
+
     def test_run_simulation_accepts_configured_strategy(self) -> None:
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
         strategy = simulate.create_strategy(config.strategy_name, config.strategy_params)
@@ -288,15 +331,15 @@ class SimulationTests(unittest.TestCase):
             config.risk_free_rate,
         )
         self.assertEqual(simulate.PASS, result.status)
-        self.assertEqual("BuyAndHold", result.strategy_name)
+        self.assertEqual("EqualWeightRebalance", result.strategy_name)
         self.assertEqual(1, result.order_count)
         self.assertEqual(1, result.fill_count)
-        self.assertEqual(Decimal("899.94"), result.final_cash)
-        self.assertEqual({"SIM": Decimal("1")}, result.final_positions)
-        self.assertEqual(Decimal("1001.9400"), result.final_equity)
-        self.assertEqual(Decimal("0.05"), result.total_fees)
+        self.assertEqual(Decimal("99.5400"), result.final_cash)
+        self.assertEqual({"SIM": Decimal("9")}, result.final_positions)
+        self.assertEqual(Decimal("1017.5400"), result.final_equity)
+        self.assertEqual(Decimal("0.4500"), result.total_fees)
         self.assertEqual(Decimal("0.01"), result.total_slippage)
-        self.assertEqual(Decimal("0.05"), result.fills[0].fee)
+        self.assertEqual(Decimal("0.4500"), result.fills[0].fee)
         self.assertEqual(Decimal("0.01"), result.fills[0].slippage)
 
     def test_default_zero_friction_preserves_legacy_behavior(self) -> None:
@@ -372,10 +415,10 @@ class SimulationCliTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, completed.returncode)
-        self.assertIn("STRATEGY: BuyAndHold", completed.stdout)
+        self.assertIn("STRATEGY: EqualWeightRebalance", completed.stdout)
         self.assertIn("INITIAL CASH: 1000", completed.stdout)
-        self.assertIn("FINAL CASH: 899.9400", completed.stdout)
-        self.assertIn("FINAL POSITIONS: SIM:1", completed.stdout)
+        self.assertIn("FINAL CASH: 99.5400", completed.stdout)
+        self.assertIn("FINAL POSITIONS: SIM:9", completed.stdout)
 
     def test_cli_config_export_validates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -410,7 +453,7 @@ class SimulationCliTests(unittest.TestCase):
             )
         self.assertEqual(0, validation.returncode)
         self.assertIn("VALIDATION STATUS: PASS", validation.stdout)
-        self.assertIn("STRATEGY: BuyAndHold", validation.stdout)
+        self.assertIn("STRATEGY: EqualWeightRebalance", validation.stdout)
 
 
 class SimulationExportTests(unittest.TestCase):
@@ -486,14 +529,14 @@ class SimulationExportTests(unittest.TestCase):
             fills = (export_dir / "fills.csv").read_text(encoding="utf-8").splitlines()
             trades = (export_dir / "trades.csv").read_text(encoding="utf-8").splitlines()
 
-            self.assertEqual("899.9400", account_summary["final_cash"])
-            self.assertEqual("1001.9400", account_summary["final_equity"])
-            self.assertEqual("0.0500", account_summary["total_fees"])
+            self.assertEqual("99.5400", account_summary["final_cash"])
+            self.assertEqual("1017.5400", account_summary["final_equity"])
+            self.assertEqual("0.4500", account_summary["total_fees"])
             self.assertEqual("0.01", account_summary["total_slippage"])
-            self.assertEqual({"fee_rate": "0.0005", "slippage_per_trade": "0.01", "total_fees": "0.0500", "total_slippage": "0.01"}, manifest["friction"])
+            self.assertEqual({"fee_rate": "0.0005", "slippage_per_trade": "0.01", "total_fees": "0.4500", "total_slippage": "0.01"}, manifest["friction"])
             self.assertEqual("0.02", manifest["risk_free_rate"])
-            self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,1,100,0.0500,0.01", fills)
-            self.assertIn("2026-01-01T09:30:00,T000001,market_follow,buy,1,100,0.0600,,SIM,BuyAndHold,market_follow,O000001,F000001", trades)
+            self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,9,100,0.4500,0.01", fills)
+            self.assertIn("2026-01-01T09:30:00,T000001,market_follow,buy,9,100,0.4600,,SIM,EqualWeightRebalance,market_follow,O000001,F000001", trades)
 
     def test_export_records_multisymbol_portfolio_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -512,7 +555,7 @@ class SimulationExportTests(unittest.TestCase):
             manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
             equity_curve = (export_dir / "equity_curve.csv").read_text(encoding="utf-8").splitlines()
 
-        self.assertEqual({"AAA": "1", "BBB": "1"}, account_summary["final_positions"])
+        self.assertEqual({"AAA": "5", "BBB": "9"}, account_summary["final_positions"])
         self.assertEqual(["AAA_prices.csv", "BBB_prices.csv", "benchmark_prices.csv"], manifest["input_files"])
         self.assertTrue(any("PORTFOLIO" in row and "\"\"AAA\"\":\"\"102\"\"" in row for row in equity_curve))
 

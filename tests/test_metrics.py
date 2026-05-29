@@ -192,7 +192,7 @@ class MetricsTests(unittest.TestCase):
             payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
 
         self.assertEqual(metrics.PASS, result.status)
-        self.assertEqual("0.700067", payload["total_return_pct"])
+        self.assertEqual("5.502724", payload["total_return_pct"])
         self.assertEqual("0.000000", payload["max_drawdown_pct"])
         self.assertEqual(True, payload["benchmark_relative"]["benchmark_available"])
         self.assertNotEqual("UNAVAILABLE", payload["benchmark_relative"]["alpha_pct"])
