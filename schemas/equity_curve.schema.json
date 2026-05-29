@@ -1,0 +1,20 @@
+{
+  "file_name": "equity_curve.csv",
+  "required": true,
+  "description": "Daily simulated account or portfolio equity curve.",
+  "required_headers": ["timestamp", "equity"],
+  "timestamp": {
+    "column": "timestamp",
+    "kind": "date",
+    "order": "strictly_increasing"
+  },
+  "key_columns": ["timestamp"],
+  "numeric_fields": {
+    "required": ["equity"],
+    "optional": ["portfolio_value"]
+  },
+  "nonnegative_fields": [],
+  "enum_fields": {},
+  "price_fields": [],
+  "alternative_groups": []
+}

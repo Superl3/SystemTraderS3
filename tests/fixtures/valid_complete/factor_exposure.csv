@@ -1,0 +1,4 @@
+timestamp,factor,exposure
+2026-01-01T00:00:00,market,1.0
+2026-01-01T00:00:00,value,0.2
+2026-01-02T00:00:00,market,0.9

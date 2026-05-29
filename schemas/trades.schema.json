@@ -1,0 +1,48 @@
+{
+  "file_name": "trades.csv",
+  "required": true,
+  "description": "Simulated trade rows. MVP0 checks structure only and does not infer PnL.",
+  "required_headers": ["timestamp", "trade_id", "strategy", "side"],
+  "timestamp": {
+    "column": "timestamp",
+    "kind": "datetime",
+    "order": "non_decreasing"
+  },
+  "key_columns": ["timestamp", "trade_id"],
+  "numeric_fields": {
+    "required": [],
+    "optional": [
+      "quantity",
+      "realized_pnl",
+      "strategy_return",
+      "price",
+      "entry_price",
+      "exit_price",
+      "fill_price",
+      "average_price",
+      "cost",
+      "fee",
+      "commission",
+      "slippage",
+      "spread_cost"
+    ]
+  },
+  "nonnegative_fields": ["cost", "fee", "commission", "slippage", "spread_cost"],
+  "enum_fields": {
+    "strategy": [
+      "market_follow",
+      "trend_following",
+      "mean_reversion",
+      "volatility_breakout",
+      "defensive",
+      "cash_pause"
+    ],
+    "side": ["buy", "sell"]
+  },
+  "price_fields": ["price", "entry_price", "exit_price", "fill_price", "average_price"],
+  "alternative_groups": [
+    {"name": "realized_pnl", "fields": ["realized_pnl"]},
+    {"name": "strategy_return", "fields": ["strategy_return"]},
+    {"name": "quantity_and_price", "fields": ["quantity"], "any_price_field": true}
+  ]
+}

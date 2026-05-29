@@ -1,0 +1,20 @@
+{
+  "file_name": "factor_exposure.csv",
+  "required": false,
+  "description": "Optional long-form factor exposure rows for future factor-relative analysis.",
+  "required_headers": ["timestamp", "factor", "exposure"],
+  "timestamp": {
+    "column": "timestamp",
+    "kind": "datetime",
+    "order": "non_decreasing"
+  },
+  "key_columns": ["timestamp", "factor"],
+  "numeric_fields": {
+    "required": ["exposure"],
+    "optional": []
+  },
+  "nonnegative_fields": [],
+  "enum_fields": {},
+  "price_fields": [],
+  "alternative_groups": []
+}

@@ -1,0 +1,20 @@
+{
+  "file_name": "benchmark.csv",
+  "required": false,
+  "description": "Optional benchmark returns for future relative analysis.",
+  "required_headers": ["timestamp", "benchmark_return"],
+  "timestamp": {
+    "column": "timestamp",
+    "kind": "datetime",
+    "order": "strictly_increasing"
+  },
+  "key_columns": ["timestamp"],
+  "numeric_fields": {
+    "required": ["benchmark_return"],
+    "optional": []
+  },
+  "nonnegative_fields": [],
+  "enum_fields": {},
+  "price_fields": [],
+  "alternative_groups": []
+}
