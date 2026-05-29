@@ -522,6 +522,11 @@ class SimulationExportTests(unittest.TestCase):
             self.assertEqual("1000", manifest["initial_cash"])
             self.assertEqual("0", manifest["risk_free_rate"])
             self.assertIn("immediate fills", manifest["simulation_assumptions"])
+            self.assertIn(
+                "multi-symbol portfolio accounting with forward-filled prices",
+                manifest["simulation_assumptions"],
+            )
+            self.assertNotIn("one symbol only", manifest["simulation_assumptions"])
             self.assertEqual(["market_prices.csv", "benchmark_prices.csv"], manifest["input_files"])
             self.assertEqual("omitted_for_determinism", manifest["generated_at_policy"])
 

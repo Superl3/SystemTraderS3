@@ -21,7 +21,7 @@
     "immediate fills",
     "configured fee rate",
     "configured fixed slippage per fill",
-    "one symbol only",
+    "multi-symbol portfolio accounting with forward-filled prices",
     "one deterministic strategy selected from a static registry or default legacy strategy"
   ],
   "strategy_name": "PeriodicFactorWeight",

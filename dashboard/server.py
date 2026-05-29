@@ -153,16 +153,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 if entry.is_dir():
                     manifest_path = entry / "run_manifest.json"
                     metrics_path = entry / "metrics.json"
+                    audit_path = entry / "audit_summary.json"
                     
                     manifest = json_to_dict(manifest_path)
                     metrics = json_to_dict(metrics_path)
+                    audit_summary = json_to_dict(audit_path)
                     
                     runs.append({
                         "run_id": entry.name,
                         "timestamp": manifest.get("timestamp", ""),
                         "strategy": manifest.get("strategy_name", "Unknown"),
-                        "dataset": manifest.get("dataset", "Unknown"),
-                        "audit_status": manifest.get("audit_status", "Unknown"),
+                        "dataset": manifest.get("dataset_dir", "Unknown"),
+                        "audit_status": audit_summary.get("audit_status", "Unknown"),
                         "total_return": metrics.get("total_return_pct", None),
                         "max_drawdown": metrics.get("max_drawdown_pct", None)
                     })

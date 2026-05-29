@@ -40,11 +40,11 @@ rtk python -m system_trading_s3.metrics $run
 
 ## Interactive Dashboard
 
-We provide a zero-dependency web dashboard to visualize simulation runs and run new backtests:
+The repo includes an experimental local dashboard for visualizing simulation runs and launching new local backtests. The Python server uses stdlib only; the browser UI currently loads Chart.js, Lucide, and fonts from public CDNs.
 
 ```powershell
 # Start the local dashboard server (from the project root directory)
-python dashboard/server.py
+rtk python dashboard/server.py
 ```
 Once running, open your browser and navigate to **http://localhost:8000** to view the interactive UI.
 
@@ -161,7 +161,7 @@ CSV is parsed as `utf-8-sig` so UTF-8 BOM headers from spreadsheet exports are a
 - No leverage automation.
 - No optimization.
 - No opaque ML prediction.
-- No dashboard.
+- No production, hosted, or broker-connected dashboard.
 - No factor attribution or factor-relative loss classification yet.
 - No richer risk-adjusted metrics such as Sortino, capture, or turnover yet.
 - No per-symbol metrics yet; metrics evaluate portfolio-level equity only.

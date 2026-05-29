@@ -1217,7 +1217,7 @@ def _manifest_payload(result: SimulationResult, dataset_dir: Path, run_id: str) 
             "immediate fills",
             _fee_assumption(result),
             _slippage_assumption(result),
-            "one symbol only",
+            "multi-symbol portfolio accounting with forward-filled prices",
             "one deterministic strategy selected from a static registry or default legacy strategy",
         ],
         "warnings": list(result.warnings),

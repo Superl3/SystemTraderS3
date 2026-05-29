@@ -146,7 +146,7 @@ Later phase: small-capital live validation criteria only.
 - Performance metrics are still narrow: total return, row-interval CAGR, max drawdown, realized-PnL win rate, profit factor, trade counts, alpha, beta, Sharpe ratio, tracking error, and information ratio.
 - Metrics evaluate portfolio-level equity only, not per-symbol attribution.
 - No factor attribution or factor-relative loss classification yet.
-- No live trading, broker integration, dashboard, optimization, or ML.
+- No live trading, broker integration, production dashboard, optimization, or ML.
 
 ## Future Data Requirements
 
