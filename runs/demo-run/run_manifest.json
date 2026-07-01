@@ -1,5 +1,10 @@
 {
   "dataset_dir": "tests\\fixtures\\valid_multisymbol",
+  "execution": {
+    "max_fill_quantity": "UNAVAILABLE",
+    "partial_fill_enabled": false,
+    "partial_fill_policy": "cancel_remainder"
+  },
   "friction": {
     "fee_rate": "0.0005",
     "slippage_per_trade": "0.01",
@@ -8,22 +13,57 @@
   },
   "generated_at_policy": "omitted_for_determinism",
   "initial_cash": "1000",
+  "input_audit_status": "INCONCLUSIVE",
   "input_files": [
     "AAA_prices.csv",
     "BBB_prices.csv",
     "factors.csv",
     "benchmark_prices.csv"
   ],
+  "risk": {
+    "cooldown_periods": 0,
+    "max_drawdown_pct": "UNAVAILABLE",
+    "max_order_notional": "UNAVAILABLE",
+    "max_position_weight": "UNAVAILABLE",
+    "min_cash_buffer": "0",
+    "risk_event_count": 0
+  },
   "risk_free_rate": "0.02",
   "run_id": "demo-run",
   "schema_version": "mvp2.run_artifacts.v1",
   "simulation_assumptions": [
-    "immediate fills",
+    "immediate full fills",
+    "order lifecycle events emitted as accepted, filled, partially_filled, or cancelled",
+    "common base risk rules applied before simulated execution",
     "configured fee rate",
     "configured fixed slippage per fill",
     "multi-symbol portfolio accounting with forward-filled prices",
-    "one deterministic strategy selected from a static registry or default legacy strategy"
+    "one deterministic strategy selected from a source-of-truth preset catalog"
   ],
   "strategy_name": "PeriodicFactorWeight",
+  "strategy_preset": {
+    "description": "Every N ticks, target equal weights in the top-K symbols for a configured factor.",
+    "name": "PeriodicFactorWeight",
+    "params": [
+      {
+        "default": "momentum",
+        "label": "Factor Name",
+        "name": "factor_name",
+        "type": "text"
+      },
+      {
+        "default": 5,
+        "label": "Rebalance Interval",
+        "name": "rebalance_interval",
+        "type": "integer"
+      },
+      {
+        "default": 10,
+        "label": "Top K",
+        "name": "top_k",
+        "type": "integer"
+      }
+    ]
+  },
   "warnings": []
 }

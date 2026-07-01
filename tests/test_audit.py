@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from system_trading_s3 import audit
+from system_trading_s3 import simulate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -285,6 +286,23 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(["timestamp", "benchmark_return"], contracts["benchmark.csv"]["required_headers"])
         self.assertEqual(["timestamp", "factor", "exposure"], contracts["factor_exposure.csv"]["required_headers"])
         self.assertIn("volatility_breakout", contracts["trades.csv"]["enum_fields"]["strategy"])
+
+    def test_json_schema_contracts_document_config_and_manifest(self) -> None:
+        config_contract = json.loads((ROOT / "schemas" / "simulation_config.schema.json").read_text(encoding="utf-8"))
+        manifest_contract = json.loads((ROOT / "schemas" / "dataset_manifest.schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            ["initial_cash", "strategy_name", "strategy_params", "friction", "execution", "risk_free_rate", "risk"],
+            config_contract["top_level_keys"],
+        )
+        self.assertEqual(["max_fill_quantity", "partial_fill_policy"], config_contract["execution_keys"])
+        self.assertEqual(
+            ["max_position_weight", "min_cash_buffer", "max_order_notional", "cooldown_periods", "max_drawdown_pct"],
+            config_contract["risk_keys"],
+        )
+        self.assertEqual(simulate.registered_strategy_names(), config_contract["registered_strategies"])
+        self.assertIn("PeriodicFactorWeight", config_contract["registered_strategies"])
+        self.assertEqual(["schema_version", "dataset_id", "files"], manifest_contract["required_keys"])
 
 
 class CliTests(unittest.TestCase):

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol
 
 from system_trading_s3 import audit
+from system_trading_s3 import input_audit
 
 
 PASS = "PASS"
@@ -22,7 +23,8 @@ FAIL = "FAIL"
 DEFAULT_INITIAL_CASH = Decimal("100000")
 ONE_UNIT = Decimal("1")
 ZERO = Decimal("0")
-STRATEGY_NAME = "buy_and_hold_one_unit"
+LEGACY_STRATEGY_NAME = "buy_and_hold_one_unit"
+STRATEGY_NAME = "RoundTripBuyAndHold"
 DEFAULT_RUN_ID = "default"
 SIMULATION_PRESET_NAME = "market_follow"
 RUN_ARTIFACT_SCHEMA_VERSION = "mvp2.run_artifacts.v1"
@@ -31,6 +33,8 @@ ARTIFACT_FILES = [
     "equity_curve.csv",
     "trades.csv",
     "orders.csv",
+    "order_events.csv",
+    "risk_events.csv",
     "fills.csv",
     "account_summary.json",
     "audit_summary.json",
@@ -132,6 +136,31 @@ class OrderRecord:
 
 
 @dataclass(frozen=True)
+class OrderEventRecord:
+    event_id: str
+    order_id: str
+    timestamp: datetime
+    event_type: str
+    status: str
+    filled_quantity: Decimal
+    remaining_quantity: Decimal
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class RiskEventRecord:
+    event_id: str
+    timestamp: datetime
+    order_id: str
+    symbol: str
+    rule: str
+    action: str
+    original_quantity: Decimal
+    adjusted_quantity: Decimal
+    message: str
+
+
+@dataclass(frozen=True)
 class AccountSnapshot:
     timestamp: datetime
     equity: Decimal
@@ -144,6 +173,7 @@ class AccountSnapshot:
     benchmark_equity: Decimal | None = None
     prices: dict[str, Decimal] = field(default_factory=dict)
     positions: dict[str, Decimal] = field(default_factory=dict)
+    factor_data: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -159,11 +189,15 @@ class SimulationResult:
     fill_count: int
     final_equity: Decimal | None
     friction: FrictionModel
+    execution: ExecutionConfig
     risk_free_rate: Decimal
+    risk: RiskConfig
     total_fees: Decimal
     total_slippage: Decimal
     fills: list[Fill]
     orders: list[OrderRecord]
+    order_events: list[OrderEventRecord]
+    risk_events: list[RiskEventRecord]
     equity_curve: list[AccountSnapshot]
     input_files: list[str]
     warnings: list[str]
@@ -177,12 +211,73 @@ class FrictionModel:
 
 
 @dataclass(frozen=True)
+class ExecutionConfig:
+    max_fill_quantity: Decimal | None = None
+    partial_fill_policy: str = "cancel_remainder"
+
+
+@dataclass(frozen=True)
+class OpenOrder:
+    order_id: str
+    order: Order
+    remaining_quantity: Decimal
+
+
+@dataclass(frozen=True)
+class RiskConfig:
+    max_position_weight: Decimal | None = None
+    min_cash_buffer: Decimal = ZERO
+    max_order_notional: Decimal | None = None
+    cooldown_periods: int = 0
+    max_drawdown_pct: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class SimulationConfig:
     initial_cash: Decimal
     strategy_name: str
     strategy_params: dict[str, object]
     friction: FrictionModel = FrictionModel()
+    execution: ExecutionConfig = ExecutionConfig()
     risk_free_rate: Decimal = ZERO
+    risk: RiskConfig = RiskConfig()
+
+
+@dataclass(frozen=True)
+class RiskDecision:
+    order: Order | None
+    events: list[RiskEventRecord]
+
+
+@dataclass(frozen=True)
+class StrategyParamSpec:
+    name: str
+    param_type: str
+    default: object
+    label: str
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "type": self.param_type,
+            "default": self.default,
+            "label": self.label,
+        }
+
+
+@dataclass(frozen=True)
+class StrategyPreset:
+    name: str
+    description: str
+    strategy_class: type
+    params: tuple[StrategyParamSpec, ...]
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "params": [param.to_payload() for param in self.params],
+        }
 
 
 class Strategy(Protocol):
@@ -338,20 +433,28 @@ class SimulatedAccount:
 
 
 class ExecutionSimulator:
-    def __init__(self, friction: FrictionModel = FrictionModel()) -> None:
+    def __init__(self, friction: FrictionModel = FrictionModel(), execution: ExecutionConfig = ExecutionConfig()) -> None:
         if friction.fee_rate < 0 or friction.slippage_per_trade < 0:
             raise SimulationInputError("friction values must be nonnegative.")
+        if execution.max_fill_quantity is not None and execution.max_fill_quantity <= 0:
+            raise SimulationInputError("execution.max_fill_quantity must be positive when provided.")
+        if execution.partial_fill_policy not in {"cancel_remainder", "carry_forward"}:
+            raise SimulationInputError("execution.partial_fill_policy must be cancel_remainder or carry_forward.")
         self.friction = friction
+        self.execution = execution
 
     def fill(self, timestamp: datetime, order: Order, order_id: str = "", fill_id: str = "") -> Fill:
-        notional = order.quantity * order.price
+        quantity = order.quantity
+        if self.execution.max_fill_quantity is not None:
+            quantity = min(quantity, self.execution.max_fill_quantity)
+        notional = quantity * order.price
         fee = notional * self.friction.fee_rate
         slippage = self.friction.slippage_per_trade
         return Fill(
             timestamp=timestamp,
             side=order.side,
             symbol=order.symbol,
-            quantity=order.quantity,
+            quantity=quantity,
             price=order.price,
             order_id=order_id,
             fill_id=fill_id,
@@ -441,6 +544,261 @@ class PortfolioRebalancer:
             return ZERO
         per_share_cost = price * (ONE_UNIT + self.friction.fee_rate)
         return _floor_decimal(cash_after_fixed_cost / per_share_cost)
+
+
+class RiskRuleEngine:
+    """Apply common base risk rules before simulated execution."""
+
+    def __init__(self, risk: RiskConfig = RiskConfig(), friction: FrictionModel = FrictionModel()) -> None:
+        self.risk = risk
+        self.friction = friction
+        self.cooldown_remaining = 0
+        self.peak_equity: Decimal | None = None
+
+    def review_order(
+        self,
+        event_id_prefix: str,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+        account_state: AccountState,
+        market_state: MarketState,
+    ) -> RiskDecision:
+        if order.side != "buy":
+            return RiskDecision(order=order, events=[])
+
+        kill_switch_event = self._drawdown_kill_switch_event(event_id_prefix, timestamp, order_id, order, account_state, market_state)
+        if kill_switch_event is not None:
+            return RiskDecision(order=None, events=[kill_switch_event])
+
+        cooldown_event = self._cooldown_event(event_id_prefix, timestamp, order_id, order)
+        if cooldown_event is not None:
+            return RiskDecision(order=None, events=[cooldown_event])
+
+        adjusted_quantity = order.quantity
+        events: list[RiskEventRecord] = []
+
+        adjusted_quantity = self._apply_max_order_notional(
+            event_id_prefix, timestamp, order_id, order, adjusted_quantity, events
+        )
+        adjusted_quantity = self._apply_max_position_weight(
+            event_id_prefix, timestamp, order_id, order, account_state, market_state, adjusted_quantity, events
+        )
+        adjusted_quantity = self._apply_min_cash_buffer(
+            event_id_prefix, timestamp, order_id, order, account_state, adjusted_quantity, events
+        )
+
+        if adjusted_quantity <= 0:
+            if not events:
+                events.append(
+                    self._event(
+                        event_id_prefix,
+                        timestamp,
+                        order_id,
+                        order,
+                        "risk_rejected",
+                        "rejected",
+                        order.quantity,
+                        ZERO,
+                        "Order rejected by risk rules.",
+                    )
+                )
+            return RiskDecision(order=None, events=events)
+        if adjusted_quantity != order.quantity:
+            self._start_cooldown()
+            return RiskDecision(
+                order=Order(side=order.side, symbol=order.symbol, quantity=adjusted_quantity, price=order.price),
+                events=events,
+            )
+        self._start_cooldown()
+        return RiskDecision(order=order, events=events)
+
+    def _drawdown_kill_switch_event(
+        self,
+        event_id_prefix: str,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+        account_state: AccountState,
+        market_state: MarketState,
+    ) -> RiskEventRecord | None:
+        if self.risk.max_drawdown_pct is None:
+            return None
+        equity = _portfolio_equity(account_state.cash, account_state.positions, _state_prices(market_state))
+        if equity <= 0:
+            drawdown_pct = Decimal("100")
+        else:
+            if self.peak_equity is None or equity > self.peak_equity:
+                self.peak_equity = equity
+            if self.peak_equity is None or self.peak_equity <= 0:
+                return None
+            drawdown_pct = (self.peak_equity - equity) / self.peak_equity * Decimal("100")
+        if drawdown_pct < self.risk.max_drawdown_pct:
+            return None
+        return self._event(
+            event_id_prefix,
+            timestamp,
+            order_id,
+            order,
+            "max_drawdown_pct",
+            "rejected",
+            order.quantity,
+            ZERO,
+            "Buy order rejected by drawdown kill switch.",
+        )
+
+    def _cooldown_event(
+        self,
+        event_id_prefix: str,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+    ) -> RiskEventRecord | None:
+        if self.risk.cooldown_periods <= 0 or self.cooldown_remaining <= 0:
+            return None
+        self.cooldown_remaining -= 1
+        return self._event(
+            event_id_prefix,
+            timestamp,
+            order_id,
+            order,
+            "cooldown_periods",
+            "rejected",
+            order.quantity,
+            ZERO,
+            "Buy order rejected during configured cooldown period.",
+        )
+
+    def _start_cooldown(self) -> None:
+        if self.risk.cooldown_periods > 0:
+            self.cooldown_remaining = self.risk.cooldown_periods
+
+    def _apply_max_order_notional(
+        self,
+        event_id_prefix: str,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+        current_quantity: Decimal,
+        events: list[RiskEventRecord],
+    ) -> Decimal:
+        if self.risk.max_order_notional is None:
+            return current_quantity
+        max_quantity = _floor_decimal(self.risk.max_order_notional / order.price)
+        if current_quantity <= max_quantity:
+            return current_quantity
+        adjusted = max(max_quantity, ZERO)
+        events.append(
+            self._event(
+                event_id_prefix,
+                timestamp,
+                order_id,
+                order,
+                "max_order_notional",
+                "adjusted" if adjusted > 0 else "rejected",
+                current_quantity,
+                adjusted,
+                "Buy order quantity capped by max_order_notional.",
+            )
+        )
+        return adjusted
+
+    def _apply_max_position_weight(
+        self,
+        event_id_prefix: str,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+        account_state: AccountState,
+        market_state: MarketState,
+        current_quantity: Decimal,
+        events: list[RiskEventRecord],
+    ) -> Decimal:
+        if self.risk.max_position_weight is None:
+            return current_quantity
+        prices = _state_prices(market_state)
+        equity = _portfolio_equity(account_state.cash, account_state.positions, prices)
+        if equity <= 0:
+            return ZERO
+        current_position_value = account_state.positions.get(order.symbol, ZERO) * order.price
+        max_position_value = equity * self.risk.max_position_weight
+        allowed_additional_value = max_position_value - current_position_value
+        max_quantity = _floor_decimal(allowed_additional_value / order.price)
+        if current_quantity <= max_quantity:
+            return current_quantity
+        adjusted = max(max_quantity, ZERO)
+        events.append(
+            self._event(
+                event_id_prefix,
+                timestamp,
+                order_id,
+                order,
+                "max_position_weight",
+                "adjusted" if adjusted > 0 else "rejected",
+                current_quantity,
+                adjusted,
+                "Buy order quantity capped by max_position_weight.",
+            )
+        )
+        return adjusted
+
+    def _apply_min_cash_buffer(
+        self,
+        event_id_prefix: str,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+        account_state: AccountState,
+        current_quantity: Decimal,
+        events: list[RiskEventRecord],
+    ) -> Decimal:
+        if self.risk.min_cash_buffer <= 0:
+            return current_quantity
+        spendable_cash = account_state.cash - self.risk.min_cash_buffer - self.friction.slippage_per_trade
+        if spendable_cash <= 0:
+            adjusted = ZERO
+        else:
+            adjusted = min(current_quantity, _floor_decimal(spendable_cash / (order.price * (ONE_UNIT + self.friction.fee_rate))))
+        if adjusted == current_quantity:
+            return current_quantity
+        events.append(
+            self._event(
+                event_id_prefix,
+                timestamp,
+                order_id,
+                order,
+                "min_cash_buffer",
+                "adjusted" if adjusted > 0 else "rejected",
+                current_quantity,
+                adjusted,
+                "Buy order quantity capped to preserve min_cash_buffer.",
+            )
+        )
+        return adjusted
+
+    def _event(
+        self,
+        event_id_prefix: str,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+        rule: str,
+        action: str,
+        original_quantity: Decimal,
+        adjusted_quantity: Decimal,
+        message: str,
+    ) -> RiskEventRecord:
+        return RiskEventRecord(
+            event_id=event_id_prefix,
+            timestamp=timestamp,
+            order_id=order_id,
+            symbol=order.symbol,
+            rule=rule,
+            action=action,
+            original_quantity=original_quantity,
+            adjusted_quantity=adjusted_quantity,
+            message=message,
+        )
 
 
 class BuyAndHoldOneUnitStrategy:
@@ -611,12 +969,61 @@ class PeriodicFactorWeightStrategy:
         return []
 
 
-STRATEGY_REGISTRY = {
-    BuyAndHoldStrategy.name: BuyAndHoldStrategy,
-    EqualWeightRebalanceStrategy.name: EqualWeightRebalanceStrategy,
-    MovingAverageCrossStrategy.name: MovingAverageCrossStrategy,
-    PeriodicFactorWeightStrategy.name: PeriodicFactorWeightStrategy,
+STRATEGY_PRESETS = {
+    BuyAndHoldOneUnitStrategy.name: StrategyPreset(
+        name=BuyAndHoldOneUnitStrategy.name,
+        description="Buy one unit of each available symbol once, then liquidate held positions at the final tick.",
+        strategy_class=BuyAndHoldOneUnitStrategy,
+        params=(),
+    ),
+    BuyAndHoldStrategy.name: StrategyPreset(
+        name=BuyAndHoldStrategy.name,
+        description="Buy a fixed quantity once for each available symbol or a configured target symbol.",
+        strategy_class=BuyAndHoldStrategy,
+        params=(
+            StrategyParamSpec("quantity", "decimal", "1", "Quantity"),
+            StrategyParamSpec("target_symbol", "text", "", "Target Symbol"),
+        ),
+    ),
+    MovingAverageCrossStrategy.name: StrategyPreset(
+        name=MovingAverageCrossStrategy.name,
+        description="Trade a deterministic short/long simple moving average cross.",
+        strategy_class=MovingAverageCrossStrategy,
+        params=(
+            StrategyParamSpec("short_window", "integer", 2, "Short Window"),
+            StrategyParamSpec("long_window", "integer", 3, "Long Window"),
+            StrategyParamSpec("quantity", "decimal", "1", "Quantity"),
+            StrategyParamSpec("target_symbol", "text", "", "Target Symbol"),
+        ),
+    ),
+    EqualWeightRebalanceStrategy.name: StrategyPreset(
+        name=EqualWeightRebalanceStrategy.name,
+        description="Emit equal target weights across all currently available symbols on the first tick.",
+        strategy_class=EqualWeightRebalanceStrategy,
+        params=(),
+    ),
+    PeriodicFactorWeightStrategy.name: StrategyPreset(
+        name=PeriodicFactorWeightStrategy.name,
+        description="Every N ticks, target equal weights in the top-K symbols for a configured factor.",
+        strategy_class=PeriodicFactorWeightStrategy,
+        params=(
+            StrategyParamSpec("factor_name", "text", "momentum", "Factor Name"),
+            StrategyParamSpec("rebalance_interval", "integer", 5, "Rebalance Interval"),
+            StrategyParamSpec("top_k", "integer", 10, "Top K"),
+        ),
+    ),
 }
+
+STRATEGY_REGISTRY = {name: preset.strategy_class for name, preset in STRATEGY_PRESETS.items()}
+STRATEGY_ALIASES = {LEGACY_STRATEGY_NAME: BuyAndHoldOneUnitStrategy.name}
+
+
+def strategy_catalog() -> list[dict[str, object]]:
+    return [STRATEGY_PRESETS[name].to_payload() for name in sorted(STRATEGY_PRESETS)]
+
+
+def registered_strategy_names() -> list[str]:
+    return sorted(STRATEGY_PRESETS)
 
 
 class SimulationEngine:
@@ -627,6 +1034,7 @@ class SimulationEngine:
         account: SimulatedAccount,
         strategy: Strategy,
         execution: ExecutionSimulator,
+        risk: RiskConfig = RiskConfig(),
     ) -> None:
         self.feed = feed
         self.benchmark_feed = benchmark_feed
@@ -634,9 +1042,14 @@ class SimulationEngine:
         self.strategy = strategy
         self.execution = execution
         self.rebalancer = PortfolioRebalancer(execution.friction)
+        self.risk = RiskRuleEngine(risk, execution.friction)
+        self.order_attempt_count = 0
         self.order_count = 0
         self.orders: list[OrderRecord] = []
+        self.order_events: list[OrderEventRecord] = []
+        self.risk_events: list[RiskEventRecord] = []
         self.fills: list[Fill] = []
+        self.open_orders: list[OpenOrder] = []
         self.equity_curve: list[AccountSnapshot] = []
         self.last_prices: dict[str, Decimal] = {}
 
@@ -646,10 +1059,12 @@ class SimulationEngine:
 
         for event in events:
             self.last_prices.update(_event_prices(event))
+            self._execute_open_orders(event)
             market_state = _market_state(event)
             self._execute_intent(event, market_state, self.strategy.on_data(market_state, _account_state(self.account)))
             if event == final_event:
                 self._execute_orders(final_event, self.strategy.on_finish(final_event, self.account))
+                self._cancel_open_orders(final_event.timestamp)
             self._record_account_snapshot(event)
 
     def _execute_intent(self, event: MarketPriceEvent, market_state: MarketState, intent: StrategyIntent) -> None:
@@ -665,13 +1080,168 @@ class SimulationEngine:
 
     def _execute_orders(self, event: MarketPriceEvent, orders: list[Order]) -> None:
         for order in orders:
-            order_id = f"O{len(self.orders) + 1:06d}"
-            fill_id = f"F{len(self.fills) + 1:06d}"
-            self.orders.append(OrderRecord(order_id=order_id, timestamp=event.timestamp, order=order, status="filled"))
+            self.order_attempt_count += 1
+            order_id = f"O{self.order_attempt_count:06d}"
+            decision = self.risk.review_order(
+                f"R{len(self.risk_events) + 1:06d}",
+                event.timestamp,
+                order_id,
+                order,
+                _account_state(self.account),
+                _market_state(event),
+            )
+            for risk_event in decision.events:
+                self._record_risk_event(risk_event)
+            if decision.order is None:
+                continue
+            reviewed_order = decision.order
+            self._record_order_event(event.timestamp, order_id, "accepted", "accepted", ZERO, reviewed_order.quantity)
+            self.orders.append(OrderRecord(order_id=order_id, timestamp=event.timestamp, order=reviewed_order, status="accepted"))
             self.order_count += 1
-            fill = self.execution.fill(event.timestamp, order, order_id=order_id, fill_id=fill_id)
-            self.account.apply_fill(fill)
-            self.fills.append(fill)
+            self._fill_order(event.timestamp, order_id, reviewed_order)
+
+    def _execute_open_orders(self, event: MarketPriceEvent) -> None:
+        if not self.open_orders:
+            return
+        open_orders = self.open_orders
+        self.open_orders = []
+        next_open_orders: list[OpenOrder] = []
+        prices = _event_prices(event)
+        for open_order in open_orders:
+            price = prices.get(open_order.order.symbol)
+            if price is None:
+                next_open_orders.append(open_order)
+                continue
+            residual_order = Order(
+                side=open_order.order.side,
+                symbol=open_order.order.symbol,
+                quantity=open_order.remaining_quantity,
+                price=price,
+            )
+            remaining_quantity = self._fill_order(
+                event.timestamp,
+                open_order.order_id,
+                residual_order,
+                carry_remaining=False,
+                cancel_remaining=False,
+            )
+            if remaining_quantity > 0:
+                next_open_orders.append(OpenOrder(open_order.order_id, open_order.order, remaining_quantity))
+        self.open_orders = next_open_orders
+
+    def _fill_order(
+        self,
+        timestamp: datetime,
+        order_id: str,
+        order: Order,
+        carry_remaining: bool = True,
+        cancel_remaining: bool = True,
+    ) -> Decimal:
+        fill_id = f"F{len(self.fills) + 1:06d}"
+        fill = self.execution.fill(timestamp, order, order_id=order_id, fill_id=fill_id)
+        remaining_quantity = order.quantity - fill.quantity
+        self.account.apply_fill(fill)
+        self.fills.append(fill)
+        if remaining_quantity == 0:
+            total_filled = self._filled_quantity_for_order(order_id)
+            original_quantity = self._order_record_for(order_id).order.quantity
+            self._replace_order_status(order_id, "filled")
+            self._record_order_event(timestamp, order_id, "filled", "filled", total_filled, ZERO)
+            if total_filled != original_quantity:
+                raise SimulationExecutionError(f"Order {order_id} filled quantity does not match original quantity.")
+            return ZERO
+
+        self._replace_order_status(order_id, "partially_filled")
+        self._record_order_event(
+            timestamp,
+            order_id,
+            "partially_filled",
+            "partially_filled",
+            fill.quantity,
+            remaining_quantity,
+            "Order partially filled by deterministic max_fill_quantity.",
+        )
+        if self.execution.execution.partial_fill_policy == "carry_forward" and carry_remaining:
+            self.open_orders.append(OpenOrder(order_id, self._order_record_for(order_id).order, remaining_quantity))
+        elif cancel_remaining:
+            self._record_order_event(
+                timestamp,
+                order_id,
+                "cancelled",
+                "partially_filled",
+                ZERO,
+                remaining_quantity,
+                "Remaining quantity cancelled after deterministic partial fill.",
+            )
+        return remaining_quantity
+
+    def _cancel_open_orders(self, timestamp: datetime) -> None:
+        for open_order in self.open_orders:
+            self._record_order_event(
+                timestamp,
+                open_order.order_id,
+                "cancelled",
+                "partially_filled",
+                ZERO,
+                open_order.remaining_quantity,
+                "Remaining quantity cancelled at final tick after carry-forward partial fills.",
+            )
+        self.open_orders = []
+
+    def _order_record_for(self, order_id: str) -> OrderRecord:
+        for record in self.orders:
+            if record.order_id == order_id:
+                return record
+        raise SimulationExecutionError(f"Unknown order_id: {order_id}.")
+
+    def _filled_quantity_for_order(self, order_id: str) -> Decimal:
+        return sum((fill.quantity for fill in self.fills if fill.order_id == order_id), ZERO)
+
+    def _replace_order_status(self, order_id: str, status: str) -> None:
+        self.orders = [
+            OrderRecord(record.order_id, record.timestamp, record.order, status if record.order_id == order_id else record.status)
+            for record in self.orders
+        ]
+
+    def _record_risk_event(self, record: RiskEventRecord) -> None:
+        event_id = f"R{len(self.risk_events) + 1:06d}"
+        self.risk_events.append(
+            RiskEventRecord(
+                event_id=event_id,
+                timestamp=record.timestamp,
+                order_id=record.order_id,
+                symbol=record.symbol,
+                rule=record.rule,
+                action=record.action,
+                original_quantity=record.original_quantity,
+                adjusted_quantity=record.adjusted_quantity,
+                message=record.message,
+            )
+        )
+
+    def _record_order_event(
+        self,
+        timestamp: datetime,
+        order_id: str,
+        event_type: str,
+        status: str,
+        filled_quantity: Decimal,
+        remaining_quantity: Decimal,
+        message: str = "",
+    ) -> None:
+        event_id = f"E{len(self.order_events) + 1:06d}"
+        self.order_events.append(
+            OrderEventRecord(
+                event_id=event_id,
+                order_id=order_id,
+                timestamp=timestamp,
+                event_type=event_type,
+                status=status,
+                filled_quantity=filled_quantity,
+                remaining_quantity=remaining_quantity,
+                message=message,
+            )
+        )
 
     def _record_account_snapshot(self, event: MarketPriceEvent) -> None:
         prices = _event_prices(event)
@@ -694,6 +1264,7 @@ class SimulationEngine:
                 benchmark_equity=benchmark_snapshot.equity,
                 prices=dict(sorted(prices.items())),
                 positions=positions,
+                factor_data={symbol: dict(sorted(values.items())) for symbol, values in sorted(event.factor_data.items())},
             )
         )
 
@@ -704,6 +1275,8 @@ def run_simulation(
     strategy: Strategy | None = None,
     friction: FrictionModel = FrictionModel(),
     risk_free_rate: Decimal = ZERO,
+    risk: RiskConfig = RiskConfig(),
+    execution: ExecutionConfig = ExecutionConfig(),
 ) -> SimulationResult:
     dataset_path = Path(dataset_dir)
     audit_status = _audit_status_for_context(dataset_path)
@@ -714,7 +1287,7 @@ def run_simulation(
         benchmark_feed = BenchmarkFeed.from_dataset(dataset_path, feed.events, initial_cash)
         account = SimulatedAccount(initial_cash)
         selected_strategy = strategy if strategy is not None else BuyAndHoldOneUnitStrategy()
-        engine = SimulationEngine(feed, benchmark_feed, account, selected_strategy, ExecutionSimulator(friction))
+        engine = SimulationEngine(feed, benchmark_feed, account, selected_strategy, ExecutionSimulator(friction, execution), risk)
         engine.run()
         final_equity = account.final_equity(engine.last_prices)
         total_fees = sum((fill.fee for fill in engine.fills), ZERO)
@@ -731,11 +1304,15 @@ def run_simulation(
             fill_count=len(engine.fills),
             final_equity=final_equity,
             friction=friction,
+            execution=execution,
             risk_free_rate=risk_free_rate,
+            risk=risk,
             total_fees=total_fees,
             total_slippage=total_slippage,
             fills=list(engine.fills),
             orders=list(engine.orders),
+            order_events=list(engine.order_events),
+            risk_events=list(engine.risk_events),
             equity_curve=list(engine.equity_curve),
             input_files=feed.input_files + (["benchmark_prices.csv"] if not benchmark_feed.warnings else []),
             warnings=list(feed.warnings) + list(benchmark_feed.warnings),
@@ -753,11 +1330,15 @@ def run_simulation(
             fill_count=0,
             final_equity=None,
             friction=friction,
+            execution=execution,
             risk_free_rate=risk_free_rate,
+            risk=risk,
             total_fees=ZERO,
             total_slippage=ZERO,
             fills=[],
             orders=[],
+            order_events=[],
+            risk_events=[],
             equity_curve=[],
             input_files=[],
             warnings=[],
@@ -769,7 +1350,7 @@ def format_result(result: SimulationResult) -> str:
     lines = [
         f"SIMULATION STATUS: {result.status}",
         f"DATASET: {result.dataset}",
-        f"MVP0 AUDIT STATUS: {result.audit_status}",
+        f"INPUT AUDIT STATUS: {result.audit_status}",
         f"STRATEGY: {result.strategy_name}",
         f"INITIAL CASH: {format_decimal(result.initial_cash)}",
         f"FINAL CASH: {_format_optional_decimal(result.final_cash)}",
@@ -809,13 +1390,17 @@ def main(argv: list[str] | None = None) -> int:
         selected_initial_cash = config.initial_cash if config is not None else args.initial_cash
         selected_strategy = create_strategy(config.strategy_name, config.strategy_params) if config is not None else None
         selected_friction = config.friction if config is not None else FrictionModel()
+        selected_execution = config.execution if config is not None else ExecutionConfig()
         selected_risk_free_rate = config.risk_free_rate if config is not None else ZERO
+        selected_risk = config.risk if config is not None else RiskConfig()
         result = run_simulation(
             args.dataset_dir,
             selected_initial_cash,
             selected_strategy,
             selected_friction,
             selected_risk_free_rate,
+            selected_risk,
+            selected_execution,
         )
     except SimulationConfigError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
@@ -888,11 +1473,18 @@ def load_simulation_config(path: Path | str) -> SimulationConfig:
 
 
 def simulation_config_from_dict(payload: dict[str, object]) -> SimulationConfig:
+    _reject_unknown_config_keys(
+        payload,
+        {"initial_cash", "strategy_name", "strategy_params", "friction", "execution", "risk_free_rate", "risk"},
+        "Config",
+    )
     initial_cash_value = payload.get("initial_cash")
     strategy_name = payload.get("strategy_name")
     strategy_params = payload.get("strategy_params")
     friction_payload = payload.get("friction", {})
+    execution_payload = payload.get("execution", {})
     risk_free_rate = _decimal_config_value(payload, "risk_free_rate", ZERO, "Config risk_free_rate")
+    risk_payload = payload.get("risk", {})
 
     if not isinstance(initial_cash_value, str):
         raise SimulationConfigError("Config initial_cash must be a decimal string.")
@@ -904,21 +1496,31 @@ def simulation_config_from_dict(payload: dict[str, object]) -> SimulationConfig:
     if not isinstance(strategy_params, dict):
         raise SimulationConfigError("Config strategy_params must be an object.")
     friction = _parse_friction_config(friction_payload)
+    execution = _parse_execution_config(execution_payload)
+    risk = _parse_risk_config(risk_payload)
     return SimulationConfig(
         initial_cash=initial_cash,
         strategy_name=strategy_name.strip(),
         strategy_params=strategy_params,
         friction=friction,
+        execution=execution,
         risk_free_rate=risk_free_rate,
+        risk=risk,
     )
 
 
 def create_strategy(strategy_name: str, strategy_params: dict[str, object]) -> Strategy:
-    strategy_class = STRATEGY_REGISTRY.get(strategy_name)
+    canonical_name = _canonical_strategy_name(strategy_name)
+    strategy_class = STRATEGY_REGISTRY.get(canonical_name)
     if strategy_class is None:
         available = ", ".join(sorted(STRATEGY_REGISTRY))
-        raise SimulationConfigError(f"Unknown strategy_name {strategy_name!r}. Available strategies: {available}.")
+        aliases = ", ".join(f"{alias}->{target}" for alias, target in sorted(STRATEGY_ALIASES.items()))
+        alias_message = f" Accepted aliases: {aliases}." if aliases else ""
+        raise SimulationConfigError(f"Unknown strategy_name {strategy_name!r}. Available strategies: {available}.{alias_message}")
 
+    if strategy_class is BuyAndHoldOneUnitStrategy:
+        _reject_unknown_params(strategy_params, set())
+        return BuyAndHoldOneUnitStrategy()
     if strategy_class is BuyAndHoldStrategy:
         quantity = _decimal_param(strategy_params, "quantity", ONE_UNIT)
         target_symbol = _optional_str_param(strategy_params, "target_symbol")
@@ -1193,8 +1795,12 @@ def _align_benchmark_to_market(
 def _write_run_artifacts(export_dir: Path, result: SimulationResult, dataset_dir: Path, run_id: str) -> None:
     _write_json(export_dir / "run_manifest.json", _manifest_payload(result, dataset_dir, run_id))
     _write_equity_curve(export_dir / "equity_curve.csv", result)
+    _write_benchmark_returns(export_dir / "benchmark.csv", result)
+    _write_factor_exposure_series(export_dir / "factor_exposure.csv", result)
     _write_trades(export_dir / "trades.csv", result)
     _write_orders(export_dir / "orders.csv", result)
+    _write_order_events(export_dir / "order_events.csv", result)
+    _write_risk_events(export_dir / "risk_events.csv", result)
     _write_fills(export_dir / "fills.csv", result)
     _write_json(export_dir / "account_summary.json", _account_summary_payload(result))
 
@@ -1207,7 +1813,9 @@ def _manifest_payload(result: SimulationResult, dataset_dir: Path, run_id: str) 
         "schema_version": RUN_ARTIFACT_SCHEMA_VERSION,
         "run_id": run_id,
         "dataset_dir": str(dataset_dir),
+        "input_audit_status": result.audit_status,
         "strategy_name": result.strategy_name,
+        "strategy_preset": _strategy_preset_payload(result.strategy_name),
         "initial_cash": format_decimal(result.initial_cash),
         "risk_free_rate": format_decimal(result.risk_free_rate),
         "input_files": _input_files_payload(result),
@@ -1217,12 +1825,27 @@ def _manifest_payload(result: SimulationResult, dataset_dir: Path, run_id: str) 
             "total_fees": format_decimal(result.total_fees),
             "total_slippage": format_decimal(result.total_slippage),
         },
+        "execution": {
+            "max_fill_quantity": _format_optional_decimal(result.execution.max_fill_quantity),
+            "partial_fill_enabled": result.execution.max_fill_quantity is not None,
+            "partial_fill_policy": result.execution.partial_fill_policy,
+        },
+        "risk": {
+            "max_position_weight": _format_optional_decimal(result.risk.max_position_weight),
+            "min_cash_buffer": format_decimal(result.risk.min_cash_buffer),
+            "max_order_notional": _format_optional_decimal(result.risk.max_order_notional),
+            "cooldown_periods": result.risk.cooldown_periods,
+            "max_drawdown_pct": _format_optional_decimal(result.risk.max_drawdown_pct),
+            "risk_event_count": len(result.risk_events),
+        },
         "simulation_assumptions": [
-            "immediate fills",
+            _execution_assumption(result),
+            "order lifecycle events emitted as accepted, filled, partially_filled, or cancelled",
+            "common base risk rules applied before simulated execution",
             _fee_assumption(result),
             _slippage_assumption(result),
             "multi-symbol portfolio accounting with forward-filled prices",
-            "one deterministic strategy selected from a static registry or default legacy strategy",
+            "one deterministic strategy selected from a source-of-truth preset catalog",
         ],
         "warnings": list(result.warnings),
         "generated_at_policy": "omitted_for_determinism",
@@ -1288,6 +1911,47 @@ def _write_equity_curve(path: Path, result: SimulationResult) -> None:
     _write_csv(path, headers, rows)
 
 
+def _write_benchmark_returns(path: Path, result: SimulationResult) -> None:
+    rows: list[list[str]] = []
+    for previous, current in zip(result.equity_curve, result.equity_curve[1:]):
+        if previous.benchmark_equity is None or current.benchmark_equity is None:
+            continue
+        if previous.benchmark_equity <= 0:
+            continue
+        benchmark_return = (current.benchmark_equity - previous.benchmark_equity) / previous.benchmark_equity
+        rows.append([current.timestamp.isoformat(), format_decimal(benchmark_return)])
+    if rows:
+        _write_csv(path, ["timestamp", "benchmark_return"], rows)
+
+
+def _write_factor_exposure_series(path: Path, result: SimulationResult) -> None:
+    rows: list[list[str]] = []
+    for snapshot in result.equity_curve:
+        factor_names = sorted({name for values in snapshot.factor_data.values() for name in values})
+        positions = {symbol: quantity for symbol, quantity in snapshot.positions.items() if quantity > 0}
+        if not positions:
+            continue
+        for factor_name in factor_names:
+            weighted_total = ZERO
+            value_total = ZERO
+            for symbol, quantity in positions.items():
+                price = snapshot.prices.get(symbol)
+                raw_factor_value = snapshot.factor_data.get(symbol, {}).get(factor_name)
+                if price is None or price <= 0 or raw_factor_value is None:
+                    continue
+                market_value = quantity * price
+                weighted_total += Decimal(str(raw_factor_value)) * market_value
+                value_total += market_value
+            if value_total > 0:
+                rows.append([snapshot.timestamp.isoformat(), factor_name, _format_exposure_decimal(weighted_total / value_total)])
+    if rows:
+        _write_csv(path, ["timestamp", "factor", "exposure"], rows)
+
+
+def _format_exposure_decimal(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.000001")), "f")
+
+
 def _write_trades(path: Path, result: SimulationResult) -> None:
     headers = [
         "timestamp",
@@ -1350,6 +2014,62 @@ def _write_orders(path: Path, result: SimulationResult) -> None:
             record.status,
         ]
         for record in result.orders
+    ]
+    _write_csv(path, headers, rows)
+
+
+def _write_order_events(path: Path, result: SimulationResult) -> None:
+    headers = [
+        "event_id",
+        "order_id",
+        "timestamp",
+        "event_type",
+        "status",
+        "filled_quantity",
+        "remaining_quantity",
+        "message",
+    ]
+    rows = [
+        [
+            record.event_id,
+            record.order_id,
+            record.timestamp.isoformat(),
+            record.event_type,
+            record.status,
+            format_decimal(record.filled_quantity),
+            format_decimal(record.remaining_quantity),
+            record.message,
+        ]
+        for record in result.order_events
+    ]
+    _write_csv(path, headers, rows)
+
+
+def _write_risk_events(path: Path, result: SimulationResult) -> None:
+    headers = [
+        "event_id",
+        "timestamp",
+        "order_id",
+        "symbol",
+        "rule",
+        "action",
+        "original_quantity",
+        "adjusted_quantity",
+        "message",
+    ]
+    rows = [
+        [
+            record.event_id,
+            record.timestamp.isoformat(),
+            record.order_id,
+            record.symbol,
+            record.rule,
+            record.action,
+            format_decimal(record.original_quantity),
+            format_decimal(record.adjusted_quantity),
+            record.message,
+        ]
+        for record in result.risk_events
     ]
     _write_csv(path, headers, rows)
 
@@ -1509,6 +2229,7 @@ def _parse_friction_config(value: object) -> FrictionModel:
         return FrictionModel()
     if not isinstance(value, dict):
         raise SimulationConfigError("Config friction must be an object.")
+    _reject_unknown_config_keys(value, {"fee_rate", "slippage_per_trade"}, "Config friction")
     fee_rate = _decimal_config_value(value, "fee_rate", ZERO, "Config friction.fee_rate")
     slippage_per_trade = _decimal_config_value(value, "slippage_per_trade", ZERO, "Config friction.slippage_per_trade")
     if fee_rate < 0:
@@ -1516,6 +2237,55 @@ def _parse_friction_config(value: object) -> FrictionModel:
     if slippage_per_trade < 0:
         raise SimulationConfigError("Config friction.slippage_per_trade must be nonnegative.")
     return FrictionModel(fee_rate=fee_rate, slippage_per_trade=slippage_per_trade)
+
+
+def _parse_execution_config(value: object) -> ExecutionConfig:
+    if value is None:
+        return ExecutionConfig()
+    if not isinstance(value, dict):
+        raise SimulationConfigError("Config execution must be an object.")
+    _reject_unknown_config_keys(value, {"max_fill_quantity", "partial_fill_policy"}, "Config execution")
+    max_fill_quantity = _optional_decimal_config_value(value, "max_fill_quantity", "Config execution.max_fill_quantity")
+    partial_fill_policy = _str_config_value(value, "partial_fill_policy", "cancel_remainder", "Config execution.partial_fill_policy")
+    if max_fill_quantity is not None and max_fill_quantity <= 0:
+        raise SimulationConfigError("Config execution.max_fill_quantity must be positive.")
+    if partial_fill_policy not in {"cancel_remainder", "carry_forward"}:
+        raise SimulationConfigError("Config execution.partial_fill_policy must be cancel_remainder or carry_forward.")
+    return ExecutionConfig(max_fill_quantity=max_fill_quantity, partial_fill_policy=partial_fill_policy)
+
+
+def _parse_risk_config(value: object) -> RiskConfig:
+    if value is None:
+        return RiskConfig()
+    if not isinstance(value, dict):
+        raise SimulationConfigError("Config risk must be an object.")
+    _reject_unknown_config_keys(
+        value,
+        {"max_position_weight", "min_cash_buffer", "max_order_notional", "cooldown_periods", "max_drawdown_pct"},
+        "Config risk",
+    )
+    max_position_weight = _optional_decimal_config_value(value, "max_position_weight", "Config risk.max_position_weight")
+    min_cash_buffer = _decimal_config_value(value, "min_cash_buffer", ZERO, "Config risk.min_cash_buffer")
+    max_order_notional = _optional_decimal_config_value(value, "max_order_notional", "Config risk.max_order_notional")
+    cooldown_periods = _int_config_value(value, "cooldown_periods", 0, "Config risk.cooldown_periods")
+    max_drawdown_pct = _optional_decimal_config_value(value, "max_drawdown_pct", "Config risk.max_drawdown_pct")
+    if max_position_weight is not None and (max_position_weight <= 0 or max_position_weight > 1):
+        raise SimulationConfigError("Config risk.max_position_weight must be greater than 0 and less than or equal to 1.")
+    if min_cash_buffer < 0:
+        raise SimulationConfigError("Config risk.min_cash_buffer must be nonnegative.")
+    if max_order_notional is not None and max_order_notional <= 0:
+        raise SimulationConfigError("Config risk.max_order_notional must be positive.")
+    if cooldown_periods < 0:
+        raise SimulationConfigError("Config risk.cooldown_periods must be nonnegative.")
+    if max_drawdown_pct is not None and (max_drawdown_pct <= 0 or max_drawdown_pct > 100):
+        raise SimulationConfigError("Config risk.max_drawdown_pct must be greater than 0 and less than or equal to 100.")
+    return RiskConfig(
+        max_position_weight=max_position_weight,
+        min_cash_buffer=min_cash_buffer,
+        max_order_notional=max_order_notional,
+        cooldown_periods=cooldown_periods,
+        max_drawdown_pct=max_drawdown_pct,
+    )
 
 
 def _decimal_config_value(params: dict[str, object], key: str, default: Decimal, label: str) -> Decimal:
@@ -1530,6 +2300,32 @@ def _decimal_config_value(params: dict[str, object], key: str, default: Decimal,
     if parsed is None:
         raise SimulationConfigError(f"{label} must be finite.")
     return parsed
+
+
+def _optional_decimal_config_value(params: dict[str, object], key: str, label: str) -> Decimal | None:
+    if key not in params or params[key] is None:
+        return None
+    return _decimal_config_value(params, key, ZERO, label)
+
+
+def _int_config_value(params: dict[str, object], key: str, default: int, label: str) -> int:
+    value = params.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SimulationConfigError(f"{label} must be an integer.")
+    return value
+
+
+def _str_config_value(params: dict[str, object], key: str, default: str, label: str) -> str:
+    value = params.get(key, default)
+    if not isinstance(value, str) or not value.strip():
+        raise SimulationConfigError(f"{label} must be a non-empty string.")
+    return value.strip()
+
+
+def _reject_unknown_config_keys(params: dict[str, object], allowed_keys: set[str], label: str) -> None:
+    unknown = sorted(str(key) for key in params if key not in allowed_keys)
+    if unknown:
+        raise SimulationConfigError(f"{label} has unknown key(s): {', '.join(unknown)}.")
 
 
 def _realized_pnl_for_sell(fill: Fill, lots: list[dict[str, Decimal]]) -> Decimal | None:
@@ -1579,6 +2375,25 @@ def _slippage_assumption(result: SimulationResult) -> str:
     return "configured fixed slippage per fill"
 
 
+def _strategy_preset_payload(strategy_name: str) -> dict[str, object]:
+    preset = STRATEGY_PRESETS.get(_canonical_strategy_name(strategy_name))
+    if preset is None:
+        return {"name": strategy_name, "description": "Custom strategy object.", "params": []}
+    return preset.to_payload()
+
+
+def _canonical_strategy_name(strategy_name: str) -> str:
+    return STRATEGY_ALIASES.get(strategy_name, strategy_name)
+
+
+def _execution_assumption(result: SimulationResult) -> str:
+    if result.execution.max_fill_quantity is None:
+        return "immediate full fills"
+    if result.execution.partial_fill_policy == "carry_forward":
+        return "deterministic partial fills capped by max_fill_quantity with residual orders carried across market ticks"
+    return "deterministic partial fills capped by max_fill_quantity"
+
+
 def _int_param(params: dict[str, object], key: str, default: int) -> int:
     value = params.get(key, default)
     if not isinstance(value, int):
@@ -1588,7 +2403,7 @@ def _int_param(params: dict[str, object], key: str, default: int) -> int:
 
 def _audit_status_for_context(dataset_path: Path) -> str:
     try:
-        return audit.audit_dataset(dataset_path).status
+        return input_audit.audit_input_dataset(dataset_path).status
     except Exception:
         return "ERROR"
 

@@ -1,0 +1,71 @@
+{
+  "active_return_tolerance": "0.000100",
+  "factor_context": {
+    "available": true,
+    "factor_attribution": {
+      "available": true,
+      "factor_summary": {
+        "momentum": {
+          "average_factor_spread_return": "-0.040050",
+          "average_portfolio_exposure": "1.200000",
+          "average_proxy_contribution": "-0.048060",
+          "periods_with_exposure": 2,
+          "periods_with_proxy": 2,
+          "total_proxy_contribution": "-0.096119"
+        }
+      },
+      "status": "PASS"
+    },
+    "holding_factor_exposure": {
+      "momentum": {
+        "average_held_factor_value": "1.300000",
+        "held_observation_count": 3,
+        "missing_held_factor_count": 0
+      }
+    },
+    "status": "PASS"
+  },
+  "gaps": [],
+  "interpretation": "Loss classification is deterministic benchmark-relative triage; it is not a profitability claim.",
+  "periods": [
+    {
+      "active_return": "-0.000996",
+      "benchmark_return": "0.010000",
+      "classification": "NO_LOSS",
+      "end_timestamp": "2026-01-02",
+      "explanation": "Strategy equity did not decline during this period.",
+      "start_timestamp": "2026-01-01",
+      "strategy_return": "0.009004"
+    },
+    {
+      "active_return": "-0.011844",
+      "benchmark_return": "0.019802",
+      "classification": "NO_LOSS",
+      "end_timestamp": "2026-01-03",
+      "explanation": "Strategy equity did not decline during this period.",
+      "start_timestamp": "2026-01-02",
+      "strategy_return": "0.007958"
+    }
+  ],
+  "schema_version": "mvp11.loss_classification.v1",
+  "source_files": [
+    "equity_curve.csv"
+  ],
+  "status": "PASS",
+  "summary": {
+    "classification_counts": {
+      "NO_LOSS": 2
+    },
+    "loss_period_count": 0,
+    "period_count": 2,
+    "worst_period": {
+      "active_return": "-0.011844",
+      "benchmark_return": "0.019802",
+      "classification": "NO_LOSS",
+      "end_timestamp": "2026-01-03",
+      "explanation": "Strategy equity did not decline during this period.",
+      "start_timestamp": "2026-01-02",
+      "strategy_return": "0.007958"
+    }
+  }
+}

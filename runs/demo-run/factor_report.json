@@ -1,0 +1,33 @@
+{
+  "buy_fill_count": 2,
+  "dataset_dir": "C:\\Users\\bug95\\OneDrive\\Documents\\S3Trader\\SystemTraderS3\\tests\\fixtures\\valid_multisymbol",
+  "factor_exposure": {
+    "momentum": {
+      "average_buy_factor_rank": "1.000000",
+      "average_buy_factor_value": "1.350000",
+      "best_buy_factor_rank": 1,
+      "buy_fills_with_factor": 2,
+      "missing_factor_count": 0,
+      "top_rank_buy_count": 2,
+      "worst_buy_factor_rank": 1
+    }
+  },
+  "factor_file": "C:\\Users\\bug95\\OneDrive\\Documents\\S3Trader\\SystemTraderS3\\tests\\fixtures\\valid_multisymbol\\factors.csv",
+  "factor_names": [
+    "momentum"
+  ],
+  "fill_count": 3,
+  "gaps": [],
+  "holding_factor_exposure": {
+    "momentum": {
+      "average_held_factor_value": "1.300000",
+      "held_observation_count": 3,
+      "missing_held_factor_count": 0
+    }
+  },
+  "interpretation": "Factor report checks intended factor exposure alignment and holding-period factor exposure only; it is not a profitability claim.",
+  "run_id": "demo-run",
+  "schema_version": "mvp10.factor_report.v1",
+  "status": "PASS",
+  "strategy_name": "PeriodicFactorWeight"
+}

@@ -1,4 +1,4 @@
-"""SystemTradingS3 simulated dataset audit foundation."""
+"""SystemTradingS3 simulated trading foundation."""
 
 __all__ = ["__version__"]
 

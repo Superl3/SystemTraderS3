@@ -7,7 +7,7 @@ import csv
 import json
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,12 @@ class FactorRow:
 
 
 @dataclass(frozen=True)
+class EquityPositionRow:
+    timestamp: datetime
+    positions: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
 class FactorReportResult:
     status: str
     payload: dict[str, Any]
@@ -57,6 +63,7 @@ def calculate_factor_report(run_artifact_dir: Path | str, dataset_dir: Path | st
     try:
         manifest = _load_json(run_dir / "run_manifest.json")
         fills = _load_fills(run_dir / "fills.csv")
+        equity_positions = _load_equity_positions(run_dir / "equity_curve.csv")
     except FactorReportError as exc:
         return FactorReportResult(status=FAIL, payload=_failed_payload([str(exc)]), errors=[str(exc)])
 
@@ -81,6 +88,7 @@ def calculate_factor_report(run_artifact_dir: Path | str, dataset_dir: Path | st
 
     factor_names = sorted({row.factor_name for row in factor_rows})
     exposure = _factor_exposure_summary(buy_fills, factor_rows, factor_names, gaps)
+    holding_exposure = _holding_factor_exposure_summary(equity_positions, factor_rows, factor_names, gaps)
 
     status = INCONCLUSIVE if gaps else PASS
     payload: dict[str, Any] = {
@@ -94,8 +102,9 @@ def calculate_factor_report(run_artifact_dir: Path | str, dataset_dir: Path | st
         "buy_fill_count": len(buy_fills),
         "factor_names": factor_names,
         "factor_exposure": exposure,
+        "holding_factor_exposure": holding_exposure,
         "gaps": gaps,
-        "interpretation": "Factor report checks intended factor exposure alignment only; it is not a profitability claim.",
+        "interpretation": "Factor report checks intended factor exposure alignment and holding-period factor exposure only; it is not a profitability claim.",
     }
     return FactorReportResult(status=status, payload=payload, errors=[])
 
@@ -122,7 +131,7 @@ def format_factor_report_result(result: FactorReportResult, report_path: Path | 
             lines.append(f"{label}: {payload[key]}")
     exposure = payload.get("factor_exposure")
     if isinstance(exposure, dict):
-        lines.append("FACTOR EXPOSURE:")
+        lines.append("BUY-SIDE FACTOR EXPOSURE:")
         for factor_name in sorted(exposure):
             item = exposure[factor_name]
             lines.append(
@@ -131,6 +140,17 @@ def format_factor_report_result(result: FactorReportResult, report_path: Path | 
                 f"average_buy_factor_rank={item.get('average_buy_factor_rank')}, "
                 f"top_rank_buy_count={item.get('top_rank_buy_count')}, "
                 f"buy_fills_with_factor={item.get('buy_fills_with_factor')}"
+            )
+    holding_exposure = payload.get("holding_factor_exposure")
+    if isinstance(holding_exposure, dict):
+        lines.append("HOLDING FACTOR EXPOSURE:")
+        for factor_name in sorted(holding_exposure):
+            item = holding_exposure[factor_name]
+            lines.append(
+                "- "
+                f"{factor_name}: average_held_factor_value={item.get('average_held_factor_value')}, "
+                f"held_observation_count={item.get('held_observation_count')}, "
+                f"missing_held_factor_count={item.get('missing_held_factor_count')}"
             )
     lines.append("GAPS:")
     gaps = payload.get("gaps", [])
@@ -203,6 +223,46 @@ def _factor_exposure_summary(
     return summary
 
 
+def _holding_factor_exposure_summary(
+    equity_positions: list[EquityPositionRow],
+    factor_rows: list[FactorRow],
+    factor_names: list[str],
+    gaps: list[str],
+) -> dict[str, dict[str, object]]:
+    summary: dict[str, dict[str, object]] = {}
+    for factor_name in factor_names:
+        held_values: list[Decimal] = []
+        missing_held_factor_count = 0
+        held_row_count = 0
+        for row in equity_positions:
+            positions = {symbol: quantity for symbol, quantity in row.positions.items() if quantity > 0}
+            if not positions:
+                continue
+            held_row_count += 1
+            snapshot = _factor_snapshot_at(factor_rows, row.timestamp, factor_name)
+            weighted_total = Decimal("0")
+            quantity_total = Decimal("0")
+            for symbol, quantity in positions.items():
+                factor_value = snapshot.get(symbol)
+                if factor_value is None:
+                    missing_held_factor_count += 1
+                    continue
+                weighted_total += factor_value * quantity
+                quantity_total += quantity
+            if quantity_total > 0:
+                held_values.append(weighted_total / quantity_total)
+        if held_row_count == 0:
+            gaps.append(f"{factor_name} holding exposure unavailable because no held positions are present.")
+        if missing_held_factor_count:
+            gaps.append(f"{factor_name} missing for {missing_held_factor_count} held position observation(s).")
+        summary[factor_name] = {
+            "held_observation_count": len(held_values),
+            "average_held_factor_value": _format_optional_decimal(_average(held_values)),
+            "missing_held_factor_count": missing_held_factor_count,
+        }
+    return summary
+
+
 def _factor_snapshot_at(factor_rows: list[FactorRow], timestamp: datetime, factor_name: str) -> dict[str, Decimal]:
     snapshot: dict[str, Decimal] = {}
     for row in factor_rows:
@@ -254,6 +314,22 @@ def _load_fills(path: Path) -> list[FillRow]:
     return fills
 
 
+def _load_equity_positions(path: Path) -> list[EquityPositionRow]:
+    if not path.is_file():
+        raise FactorReportError("equity_curve.csv is missing.")
+    rows = _load_csv_dicts(path)
+    positions: list[EquityPositionRow] = []
+    for index, row in enumerate(rows, start=2):
+        timestamp = _parse_equity_date("equity_curve.csv", index, "timestamp", row.get("timestamp", ""))
+        positions.append(
+            EquityPositionRow(
+                timestamp=timestamp,
+                positions=_parse_position_quantities("equity_curve.csv", index, row.get("position_quantities", "")),
+            )
+        )
+    return positions
+
+
 def _load_factor_rows(path: Path) -> list[FactorRow]:
     rows = _load_csv_dicts(path)
     factors: list[FactorRow] = []
@@ -300,11 +376,39 @@ def _parse_datetime(file_name: str, row_number: int, column: str, value: str) ->
     return parsed
 
 
+def _parse_equity_date(file_name: str, row_number: int, column: str, value: str) -> datetime:
+    parsed = audit._parse_timestamp(value, "date")
+    if parsed is None or isinstance(parsed, datetime):
+        raise FactorReportError(f"{file_name} row {row_number} has invalid {column}.")
+    return datetime.combine(parsed, time.max)
+
+
 def _parse_decimal(file_name: str, row_number: int, column: str, value: str) -> Decimal:
     parsed = audit._parse_decimal(value)
     if parsed is None:
         raise FactorReportError(f"{file_name} row {row_number} has invalid {column}.")
     return parsed
+
+
+def _parse_position_quantities(file_name: str, row_number: int, value: str) -> dict[str, Decimal]:
+    if audit._is_blank(value):
+        return {}
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise FactorReportError(f"{file_name} row {row_number} has invalid position_quantities JSON.") from exc
+    if not isinstance(payload, dict):
+        raise FactorReportError(f"{file_name} row {row_number} position_quantities must be a JSON object.")
+    positions: dict[str, Decimal] = {}
+    for symbol, raw_quantity in payload.items():
+        if not isinstance(symbol, str) or not isinstance(raw_quantity, str):
+            raise FactorReportError(f"{file_name} row {row_number} position_quantities must map symbols to decimal strings.")
+        quantity = audit._parse_decimal(raw_quantity)
+        if quantity is None:
+            raise FactorReportError(f"{file_name} row {row_number} has invalid position quantity for {symbol}.")
+        if quantity != 0:
+            positions[symbol] = quantity
+    return dict(sorted(positions.items()))
 
 
 def _required_text(file_name: str, row_number: int, column: str, value: str) -> str:

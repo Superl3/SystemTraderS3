@@ -23,11 +23,23 @@ def write_file(root: Path, name: str, content: str) -> None:
     (root / name).write_text(content, encoding="utf-8", newline="")
 
 
+class BuyEveryTickStrategy:
+    name = "BuyEveryTick"
+
+    def on_data(self, market_state: simulate.MarketState, account_state: simulate.AccountState) -> list[simulate.Order]:
+        del account_state
+        return [simulate.Order(side="buy", symbol=market_state.symbol, quantity=Decimal("1"), price=market_state.price)]
+
+    def on_finish(self, final_event: simulate.MarketPriceEvent, account: simulate.SimulatedAccount) -> list[simulate.Order]:
+        del final_event, account
+        return []
+
+
 class SimulationTests(unittest.TestCase):
     def test_simulation_runs_on_valid_complete(self) -> None:
         result = simulate.run_simulation(FIXTURES / "valid_complete")
         self.assertEqual(simulate.PASS, result.status)
-        self.assertEqual("PASS", result.audit_status)
+        self.assertEqual("INCONCLUSIVE", result.audit_status)
         self.assertEqual(2, result.order_count)
         self.assertEqual(2, result.fill_count)
         self.assertEqual(Decimal("100002"), result.final_cash)
@@ -46,7 +58,7 @@ class SimulationTests(unittest.TestCase):
             write_file(root, "market_prices.csv", VALID_MARKET)
             result = simulate.run_simulation(root)
         self.assertEqual(simulate.PASS, result.status)
-        self.assertEqual("FAIL", result.audit_status)
+        self.assertEqual("INCONCLUSIVE", result.audit_status)
         self.assertEqual(2, result.fill_count)
 
     def test_first_step_creates_buy_order(self) -> None:
@@ -229,9 +241,18 @@ class SimulationTests(unittest.TestCase):
 
     def test_strategy_registry_exposes_configured_strategies(self) -> None:
         self.assertEqual(
-            {"BuyAndHold", "EqualWeightRebalance", "MovingAverageCross", "PeriodicFactorWeight"},
+            {"BuyAndHold", "EqualWeightRebalance", "MovingAverageCross", "PeriodicFactorWeight", "RoundTripBuyAndHold"},
             set(simulate.STRATEGY_REGISTRY),
         )
+        catalog = {item["name"]: item for item in simulate.strategy_catalog()}
+        self.assertEqual(set(simulate.STRATEGY_REGISTRY), set(catalog))
+        self.assertEqual([], catalog["RoundTripBuyAndHold"]["params"])
+        self.assertEqual("momentum", catalog["PeriodicFactorWeight"]["params"][0]["default"])
+        self.assertEqual(["factor_name", "rebalance_interval", "top_k"], [param["name"] for param in catalog["PeriodicFactorWeight"]["params"]])
+
+    def test_legacy_strategy_name_is_accepted_as_alias(self) -> None:
+        strategy = simulate.create_strategy("buy_and_hold_one_unit", {})
+        self.assertEqual("RoundTripBuyAndHold", strategy.name)
 
     def test_load_simulation_config_parses_sample_config(self) -> None:
         config = simulate.load_simulation_config(FIXTURES / "sample_config.json")
@@ -241,6 +262,216 @@ class SimulationTests(unittest.TestCase):
         self.assertEqual(Decimal("0.0005"), config.friction.fee_rate)
         self.assertEqual(Decimal("0.01"), config.friction.slippage_per_trade)
         self.assertEqual(Decimal("0.02"), config.risk_free_rate)
+        self.assertEqual(Decimal("0"), config.risk.min_cash_buffer)
+
+    def test_load_simulation_config_parses_extended_risk_rules(self) -> None:
+        config = simulate.simulation_config_from_dict(
+            {
+                "initial_cash": "1000",
+                "strategy_name": "BuyAndHold",
+                "strategy_params": {},
+                "risk": {
+                    "cooldown_periods": 2,
+                    "max_drawdown_pct": "4.5",
+                },
+            }
+        )
+        self.assertEqual(2, config.risk.cooldown_periods)
+        self.assertEqual(Decimal("4.5"), config.risk.max_drawdown_pct)
+
+    def test_load_simulation_config_parses_execution_rules(self) -> None:
+        config = simulate.simulation_config_from_dict(
+            {
+                "initial_cash": "1000",
+                "strategy_name": "BuyAndHold",
+                "strategy_params": {},
+                "execution": {"max_fill_quantity": "3", "partial_fill_policy": "carry_forward"},
+            }
+        )
+        self.assertEqual(Decimal("3"), config.execution.max_fill_quantity)
+        self.assertEqual("carry_forward", config.execution.partial_fill_policy)
+
+    def test_simulation_config_rejects_unknown_top_level_keys(self) -> None:
+        with self.assertRaisesRegex(simulate.SimulationConfigError, "unknown key"):
+            simulate.simulation_config_from_dict(
+                {
+                    "initial_cash": "1000",
+                    "strategy_name": "BuyAndHold",
+                    "strategy_params": {},
+                    "magic_optimizer": True,
+                }
+            )
+
+    def test_simulation_config_rejects_unknown_friction_keys(self) -> None:
+        with self.assertRaisesRegex(simulate.SimulationConfigError, "unknown key"):
+            simulate.simulation_config_from_dict(
+                {
+                    "initial_cash": "1000",
+                    "strategy_name": "BuyAndHold",
+                    "strategy_params": {},
+                    "friction": {"fee_rate": "0", "spread_model": "wishful"},
+                }
+            )
+
+    def test_simulation_config_rejects_unknown_execution_keys(self) -> None:
+        with self.assertRaisesRegex(simulate.SimulationConfigError, "unknown key"):
+            simulate.simulation_config_from_dict(
+                {
+                    "initial_cash": "1000",
+                    "strategy_name": "BuyAndHold",
+                    "strategy_params": {},
+                    "execution": {"imaginary_liquidity_model": True},
+                }
+            )
+
+    def test_simulation_config_rejects_unknown_partial_fill_policy(self) -> None:
+        with self.assertRaisesRegex(simulate.SimulationConfigError, "partial_fill_policy"):
+            simulate.simulation_config_from_dict(
+                {
+                    "initial_cash": "1000",
+                    "strategy_name": "BuyAndHold",
+                    "strategy_params": {},
+                    "execution": {"partial_fill_policy": "pretend_liquidity"},
+                }
+            )
+
+    def test_simulation_config_rejects_unknown_risk_keys(self) -> None:
+        with self.assertRaisesRegex(simulate.SimulationConfigError, "unknown key"):
+            simulate.simulation_config_from_dict(
+                {
+                    "initial_cash": "1000",
+                    "strategy_name": "BuyAndHold",
+                    "strategy_params": {},
+                    "risk": {"max_position_weight": "0.5", "fake_kill_switch": True},
+                }
+            )
+
+    def test_risk_engine_caps_buy_order_by_notional(self) -> None:
+        strategy = simulate.create_strategy("BuyAndHold", {"quantity": "10"})
+        result = simulate.run_simulation(
+            FIXTURES / "valid_complete",
+            Decimal("1000"),
+            strategy,
+            risk=simulate.RiskConfig(max_order_notional=Decimal("250")),
+        )
+
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual({"SIM": Decimal("2")}, result.final_positions)
+        self.assertEqual(1, len(result.risk_events))
+        self.assertEqual("max_order_notional", result.risk_events[0].rule)
+        self.assertEqual("adjusted", result.risk_events[0].action)
+        self.assertEqual(Decimal("10"), result.risk_events[0].original_quantity)
+        self.assertEqual(Decimal("2"), result.risk_events[0].adjusted_quantity)
+
+    def test_risk_rejected_order_ids_are_not_reused(self) -> None:
+        strategy = simulate.create_strategy("BuyAndHold", {"quantity": "10"})
+        result = simulate.run_simulation(
+            FIXTURES / "valid_multisymbol",
+            Decimal("1000"),
+            strategy,
+            risk=simulate.RiskConfig(max_order_notional=Decimal("75")),
+        )
+
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual("O000002", result.orders[0].order_id)
+        self.assertEqual("O000001", result.risk_events[0].order_id)
+        self.assertEqual("rejected", result.risk_events[0].action)
+
+    def test_risk_engine_rejects_buy_orders_during_cooldown(self) -> None:
+        result = simulate.run_simulation(
+            FIXTURES / "valid_complete",
+            Decimal("1000"),
+            BuyEveryTickStrategy(),
+            risk=simulate.RiskConfig(cooldown_periods=1),
+        )
+
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual(2, result.order_count)
+        self.assertEqual({"SIM": Decimal("2")}, result.final_positions)
+        self.assertEqual(1, len(result.risk_events))
+        self.assertEqual("cooldown_periods", result.risk_events[0].rule)
+        self.assertEqual("rejected", result.risk_events[0].action)
+
+    def test_risk_engine_rejects_buy_orders_after_drawdown_kill_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset_dir = Path(tmp) / "drawdown"
+            write_file(
+                dataset_dir,
+                "market_prices.csv",
+                "timestamp,symbol,price\n"
+                "2026-01-01T09:30:00,SIM,100\n"
+                "2026-01-02T09:30:00,SIM,50\n"
+                "2026-01-03T09:30:00,SIM,49\n",
+            )
+            result = simulate.run_simulation(
+                dataset_dir,
+                Decimal("1000"),
+                BuyEveryTickStrategy(),
+                risk=simulate.RiskConfig(max_drawdown_pct=Decimal("4")),
+            )
+
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual(1, result.order_count)
+        self.assertEqual({"SIM": Decimal("1")}, result.final_positions)
+        self.assertEqual(["max_drawdown_pct", "max_drawdown_pct"], [event.rule for event in result.risk_events])
+        self.assertTrue(all(event.action == "rejected" for event in result.risk_events))
+
+    def test_execution_config_caps_fill_quantity_and_cancels_remainder(self) -> None:
+        strategy = simulate.create_strategy("BuyAndHold", {"quantity": "10"})
+        result = simulate.run_simulation(
+            FIXTURES / "valid_complete",
+            Decimal("1000"),
+            strategy,
+            execution=simulate.ExecutionConfig(max_fill_quantity=Decimal("3")),
+        )
+
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual(1, result.order_count)
+        self.assertEqual(1, result.fill_count)
+        self.assertEqual(Decimal("700"), result.final_cash)
+        self.assertEqual({"SIM": Decimal("3")}, result.final_positions)
+        self.assertEqual(["partially_filled"], [order.status for order in result.orders])
+        self.assertEqual([Decimal("3")], [fill.quantity for fill in result.fills])
+        self.assertEqual(
+            ["accepted", "partially_filled", "cancelled"],
+            [event.event_type for event in result.order_events],
+        )
+
+    def test_execution_config_can_carry_partial_fill_remainders_across_ticks(self) -> None:
+        strategy = simulate.create_strategy("BuyAndHold", {"quantity": "7"})
+        result = simulate.run_simulation(
+            FIXTURES / "valid_complete",
+            Decimal("1000"),
+            strategy,
+            execution=simulate.ExecutionConfig(max_fill_quantity=Decimal("3"), partial_fill_policy="carry_forward"),
+        )
+
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual(["filled"], [order.status for order in result.orders])
+        self.assertEqual([Decimal("3"), Decimal("3"), Decimal("1")], [fill.quantity for fill in result.fills])
+        self.assertEqual(
+            ["accepted", "partially_filled", "partially_filled", "filled"],
+            [event.event_type for event in result.order_events],
+        )
+        self.assertEqual(
+            [Decimal("7"), Decimal("4"), Decimal("1"), Decimal("0")],
+            [event.remaining_quantity for event in result.order_events],
+        )
+
+    def test_carry_forward_partial_order_cancels_remaining_quantity_at_final_tick(self) -> None:
+        strategy = simulate.create_strategy("BuyAndHold", {"quantity": "10"})
+        result = simulate.run_simulation(
+            FIXTURES / "valid_complete",
+            Decimal("1000"),
+            strategy,
+            execution=simulate.ExecutionConfig(max_fill_quantity=Decimal("3"), partial_fill_policy="carry_forward"),
+        )
+
+        self.assertEqual(simulate.PASS, result.status)
+        self.assertEqual(["partially_filled"], [order.status for order in result.orders])
+        self.assertEqual([Decimal("3"), Decimal("3"), Decimal("3")], [fill.quantity for fill in result.fills])
+        self.assertEqual("cancelled", result.order_events[-1].event_type)
+        self.assertEqual(Decimal("1"), result.order_events[-1].remaining_quantity)
 
     def test_create_buy_and_hold_strategy_from_registry(self) -> None:
         strategy = simulate.create_strategy("BuyAndHold", {"quantity": "2"})
@@ -423,8 +654,8 @@ class SimulationCliTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode)
         lines = completed.stdout.splitlines()
         self.assertIn("SIMULATION STATUS: PASS", lines)
-        self.assertIn("MVP0 AUDIT STATUS: PASS", lines)
-        self.assertIn("STRATEGY: buy_and_hold_one_unit", lines)
+        self.assertIn("INPUT AUDIT STATUS: INCONCLUSIVE", lines)
+        self.assertIn("STRATEGY: RoundTripBuyAndHold", lines)
         self.assertIn("INITIAL CASH: 100000", lines)
         self.assertIn("FINAL CASH: 100002", lines)
         self.assertIn("FINAL POSITIONS: none", lines)
@@ -516,7 +747,9 @@ class SimulationExportTests(unittest.TestCase):
             export_dir = Path(tmp) / "run"
             result = simulate.run_simulation(FIXTURES / "valid_complete")
             simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="mvp2-test")
-            self.assertEqual(sorted(simulate.ARTIFACT_FILES), sorted(path.name for path in export_dir.iterdir()))
+            exported_names = {path.name for path in export_dir.iterdir()}
+            self.assertTrue(set(simulate.ARTIFACT_FILES).issubset(exported_names))
+            self.assertIn("benchmark.csv", exported_names)
 
     def test_exported_equity_and_trades_can_be_audited_by_mvp0(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -535,10 +768,12 @@ class SimulationExportTests(unittest.TestCase):
             simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="mvp2-test")
             manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
             self.assertEqual("mvp2-test", manifest["run_id"])
-            self.assertEqual("buy_and_hold_one_unit", manifest["strategy_name"])
+            self.assertEqual("RoundTripBuyAndHold", manifest["strategy_name"])
+            self.assertEqual("RoundTripBuyAndHold", manifest["strategy_preset"]["name"])
+            self.assertIn("liquidate held positions", manifest["strategy_preset"]["description"])
             self.assertEqual("1000", manifest["initial_cash"])
             self.assertEqual("0", manifest["risk_free_rate"])
-            self.assertIn("immediate fills", manifest["simulation_assumptions"])
+            self.assertIn("immediate full fills", manifest["simulation_assumptions"])
             self.assertIn(
                 "multi-symbol portfolio accounting with forward-filled prices",
                 manifest["simulation_assumptions"],
@@ -546,6 +781,7 @@ class SimulationExportTests(unittest.TestCase):
             self.assertNotIn("one symbol only", manifest["simulation_assumptions"])
             self.assertEqual(["market_prices.csv", "benchmark_prices.csv"], manifest["input_files"])
             self.assertEqual("omitted_for_determinism", manifest["generated_at_policy"])
+            self.assertEqual("INCONCLUSIVE", manifest["input_audit_status"])
 
     def test_account_summary_matches_final_account_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -593,6 +829,17 @@ class SimulationExportTests(unittest.TestCase):
             self.assertEqual("0.01", account_summary["total_slippage"])
             self.assertEqual({"fee_rate": "0.0005", "slippage_per_trade": "0.01", "total_fees": "0.4500", "total_slippage": "0.01"}, manifest["friction"])
             self.assertEqual("0.02", manifest["risk_free_rate"])
+            self.assertEqual(
+                {
+                    "cooldown_periods": 0,
+                    "max_drawdown_pct": "UNAVAILABLE",
+                    "max_order_notional": "UNAVAILABLE",
+                    "max_position_weight": "UNAVAILABLE",
+                    "min_cash_buffer": "0",
+                    "risk_event_count": 0,
+                },
+                manifest["risk"],
+            )
             self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,9,100,0.4500,0.01", fills)
             self.assertIn("2026-01-01T09:30:00,T000001,market_follow,buy,9,100,0.4600,,SIM,EqualWeightRebalance,market_follow,O000001,F000001", trades)
 
@@ -611,11 +858,20 @@ class SimulationExportTests(unittest.TestCase):
             simulate.export_run_artifacts(result, FIXTURES / "valid_multisymbol", export_dir, run_id="mvp7-test")
             account_summary = json.loads((export_dir / "account_summary.json").read_text(encoding="utf-8"))
             manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            audit_summary = json.loads((export_dir / "audit_summary.json").read_text(encoding="utf-8"))
             equity_curve = (export_dir / "equity_curve.csv").read_text(encoding="utf-8").splitlines()
+            benchmark = (export_dir / "benchmark.csv").read_text(encoding="utf-8").splitlines()
+            factor_exposure = (export_dir / "factor_exposure.csv").read_text(encoding="utf-8").splitlines()
 
         self.assertEqual({"BBB": "18"}, account_summary["final_positions"])
         self.assertEqual(["AAA_prices.csv", "BBB_prices.csv", "factors.csv", "benchmark_prices.csv"], manifest["input_files"])
+        self.assertEqual("PASS", audit_summary["audit_status"])
         self.assertTrue(any("PORTFOLIO" in row and "\"\"AAA\"\":\"\"102\"\"" in row for row in equity_curve))
+        self.assertEqual("timestamp,benchmark_return", benchmark[0])
+        self.assertIn("2026-01-02T09:30:00,0.01", benchmark)
+        self.assertEqual("timestamp,factor,exposure", factor_exposure[0])
+        self.assertIn("2026-01-01T09:30:00,momentum,1.200000", factor_exposure)
+        self.assertIn("2026-01-03T09:30:00,momentum,1.500000", factor_exposure)
 
     def test_orders_and_fills_contain_expected_buy_and_sell_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -623,13 +879,90 @@ class SimulationExportTests(unittest.TestCase):
             result = simulate.run_simulation(FIXTURES / "valid_complete")
             simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="mvp2-test")
             orders = (export_dir / "orders.csv").read_text(encoding="utf-8").splitlines()
+            order_events = (export_dir / "order_events.csv").read_text(encoding="utf-8").splitlines()
+            risk_events = (export_dir / "risk_events.csv").read_text(encoding="utf-8").splitlines()
             fills = (export_dir / "fills.csv").read_text(encoding="utf-8").splitlines()
             self.assertEqual("order_id,timestamp,symbol,side,quantity,requested_price,status", orders[0])
             self.assertIn("O000001,2026-01-01T09:30:00,SIM,buy,1,100,filled", orders)
             self.assertIn("O000002,2026-01-03T09:30:00,SIM,sell,1,102,filled", orders)
+            self.assertEqual("event_id,order_id,timestamp,event_type,status,filled_quantity,remaining_quantity,message", order_events[0])
+            self.assertIn("E000001,O000001,2026-01-01T09:30:00,accepted,accepted,0,1,", order_events)
+            self.assertIn("E000002,O000001,2026-01-01T09:30:00,filled,filled,1,0,", order_events)
+            self.assertEqual("event_id,timestamp,order_id,symbol,rule,action,original_quantity,adjusted_quantity,message", risk_events[0])
             self.assertEqual("fill_id,order_id,timestamp,symbol,side,quantity,fill_price,fee,slippage", fills[0])
             self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,1,100,0,0", fills)
             self.assertIn("F000002,O000002,2026-01-03T09:30:00,SIM,sell,1,102,0,0", fills)
+
+    def test_partial_fill_export_records_lifecycle_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export_dir = Path(tmp) / "run"
+            strategy = simulate.create_strategy("BuyAndHold", {"quantity": "10"})
+            result = simulate.run_simulation(
+                FIXTURES / "valid_complete",
+                Decimal("1000"),
+                strategy,
+                execution=simulate.ExecutionConfig(max_fill_quantity=Decimal("3")),
+            )
+            simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="partial-fill-test")
+            manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            orders = (export_dir / "orders.csv").read_text(encoding="utf-8").splitlines()
+            order_events = (export_dir / "order_events.csv").read_text(encoding="utf-8").splitlines()
+            fills = (export_dir / "fills.csv").read_text(encoding="utf-8").splitlines()
+            validation = subprocess.run(
+                [sys.executable, "-m", "system_trading_s3.validate_run", str(export_dir)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(
+            {"max_fill_quantity": "3", "partial_fill_enabled": True, "partial_fill_policy": "cancel_remainder"},
+            manifest["execution"],
+        )
+        self.assertIn("O000001,2026-01-01T09:30:00,SIM,buy,10,100,partially_filled", orders)
+        self.assertIn("E000002,O000001,2026-01-01T09:30:00,partially_filled,partially_filled,3,7,Order partially filled by deterministic max_fill_quantity.", order_events)
+        self.assertIn("E000003,O000001,2026-01-01T09:30:00,cancelled,partially_filled,0,7,Remaining quantity cancelled after deterministic partial fill.", order_events)
+        self.assertIn("F000001,O000001,2026-01-01T09:30:00,SIM,buy,3,100,0,0", fills)
+        self.assertEqual(0, validation.returncode, validation.stdout + validation.stderr)
+        self.assertIn("VALIDATION STATUS: PASS", validation.stdout)
+
+    def test_carry_forward_partial_fill_export_records_multi_tick_lifecycle_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export_dir = Path(tmp) / "run"
+            strategy = simulate.create_strategy("BuyAndHold", {"quantity": "7"})
+            result = simulate.run_simulation(
+                FIXTURES / "valid_complete",
+                Decimal("1000"),
+                strategy,
+                execution=simulate.ExecutionConfig(max_fill_quantity=Decimal("3"), partial_fill_policy="carry_forward"),
+            )
+            simulate.export_run_artifacts(result, FIXTURES / "valid_complete", export_dir, run_id="carry-forward-test")
+            manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            orders = (export_dir / "orders.csv").read_text(encoding="utf-8").splitlines()
+            order_events = (export_dir / "order_events.csv").read_text(encoding="utf-8").splitlines()
+            fills = (export_dir / "fills.csv").read_text(encoding="utf-8").splitlines()
+            validation = subprocess.run(
+                [sys.executable, "-m", "system_trading_s3.validate_run", str(export_dir)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(
+            {"max_fill_quantity": "3", "partial_fill_enabled": True, "partial_fill_policy": "carry_forward"},
+            manifest["execution"],
+        )
+        self.assertIn("O000001,2026-01-01T09:30:00,SIM,buy,7,100,filled", orders)
+        self.assertIn("E000002,O000001,2026-01-01T09:30:00,partially_filled,partially_filled,3,4,Order partially filled by deterministic max_fill_quantity.", order_events)
+        self.assertIn("E000003,O000001,2026-01-02T09:30:00,partially_filled,partially_filled,3,1,Order partially filled by deterministic max_fill_quantity.", order_events)
+        self.assertIn("E000004,O000001,2026-01-03T09:30:00,filled,filled,7,0,", order_events)
+        self.assertIn("F000002,O000001,2026-01-02T09:30:00,SIM,buy,3,101,0,0", fills)
+        self.assertIn("F000003,O000001,2026-01-03T09:30:00,SIM,buy,1,102,0,0", fills)
+        self.assertEqual(0, validation.returncode, validation.stdout + validation.stderr)
 
     def test_repeated_export_with_same_run_id_is_byte_identical(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -671,7 +1004,9 @@ class SimulationExportTests(unittest.TestCase):
                 overwrite=True,
             )
             self.assertFalse((export_dir / "old.txt").exists())
-            self.assertEqual(sorted(simulate.ARTIFACT_FILES), sorted(path.name for path in export_dir.iterdir()))
+            exported_names = {path.name for path in export_dir.iterdir()}
+            self.assertTrue(set(simulate.ARTIFACT_FILES).issubset(exported_names))
+            self.assertIn("benchmark.csv", exported_names)
 
     def test_cli_simulation_failure_does_not_leave_partial_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

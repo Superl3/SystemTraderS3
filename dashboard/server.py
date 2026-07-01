@@ -19,11 +19,18 @@ try:
         load_simulation_config,
         simulation_config_from_dict,
         create_strategy,
+        strategy_catalog,
         FrictionModel,
+        RiskConfig,
+        ExecutionConfig,
         export_run_artifacts,
         PASS
     )
     from system_trading_s3.metrics import write_metrics
+    from system_trading_s3.factor_attribution import write_factor_attribution
+    from system_trading_s3.factor_report import write_factor_report
+    from system_trading_s3.factor_risk_model import write_factor_risk_model
+    from system_trading_s3.loss_classification import write_loss_classification
 except ImportError as e:
     print(f"Error importing simulation packages: {e}")
     print("Please make sure you run the server from the project root directory.")
@@ -34,40 +41,10 @@ RUNS_DIR = ROOT_DIR / "runs"
 FIXTURES_DIR = ROOT_DIR / "tests" / "fixtures"
 DATASETS_DIR = ROOT_DIR / "datasets"
 STRATEGY_CONFIGS_DIR = ROOT_DIR / "configs" / "strategies"
-STRATEGY_CATALOG = [
-    {
-        "name": "BuyAndHold",
-        "description": "Buy a fixed quantity once for each available symbol or a configured target symbol.",
-        "params": [
-            {"name": "quantity", "type": "decimal", "default": "1", "label": "Quantity"},
-            {"name": "target_symbol", "type": "text", "default": "", "label": "Target Symbol"},
-        ],
-    },
-    {
-        "name": "MovingAverageCross",
-        "description": "Trade a deterministic short/long simple moving average cross.",
-        "params": [
-            {"name": "short_window", "type": "integer", "default": 2, "label": "Short Window"},
-            {"name": "long_window", "type": "integer", "default": 3, "label": "Long Window"},
-            {"name": "quantity", "type": "decimal", "default": "1", "label": "Quantity"},
-            {"name": "target_symbol", "type": "text", "default": "", "label": "Target Symbol"},
-        ],
-    },
-    {
-        "name": "EqualWeightRebalance",
-        "description": "Emit equal target weights across all currently available symbols on the first tick.",
-        "params": [],
-    },
-    {
-        "name": "PeriodicFactorWeight",
-        "description": "Every N ticks, target equal weights in the top-K symbols for a configured factor.",
-        "params": [
-            {"name": "factor_name", "type": "text", "default": "momentum", "label": "Factor Name"},
-            {"name": "rebalance_interval", "type": "integer", "default": 5, "label": "Rebalance Interval"},
-            {"name": "top_k", "type": "integer", "default": 10, "label": "Top K"},
-        ],
-    },
-]
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
 
 # Helper to serialize Decimals to float/str in JSON
 class DecimalEncoder(json.JSONEncoder):
@@ -247,6 +224,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "timestamp": manifest.get("timestamp", ""),
                         "strategy": manifest.get("strategy_name", "Unknown"),
                         "dataset": manifest.get("dataset_dir", "Unknown"),
+                        "input_audit_status": manifest.get("input_audit_status", "Unknown"),
                         "audit_status": audit_summary.get("audit_status", "Unknown"),
                         "total_return": metrics.get("total_return_pct", None),
                         "max_drawdown": metrics.get("max_drawdown_pct", None)
@@ -266,10 +244,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         account_summary = json_to_dict(run_path / "account_summary.json")
         audit_summary = json_to_dict(run_path / "audit_summary.json")
         metrics = json_to_dict(run_path / "metrics.json")
+        factor_report = json_to_dict(run_path / "factor_report.json")
+        factor_attribution = json_to_dict(run_path / "factor_attribution.json")
+        factor_risk_model = json_to_dict(run_path / "factor_risk_model.json")
+        loss_classification = json_to_dict(run_path / "loss_classification.json")
         
         equity_curve = csv_to_dict_list(run_path / "equity_curve.csv")
         trades = csv_to_dict_list(run_path / "trades.csv")
         orders = csv_to_dict_list(run_path / "orders.csv")
+        order_events = csv_to_dict_list(run_path / "order_events.csv")
+        risk_events = csv_to_dict_list(run_path / "risk_events.csv")
         fills = csv_to_dict_list(run_path / "fills.csv")
         
         data = {
@@ -278,9 +262,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "account_summary": account_summary,
             "audit_summary": audit_summary,
             "metrics": metrics,
+            "factor_report": factor_report,
+            "factor_attribution": factor_attribution,
+            "factor_risk_model": factor_risk_model,
+            "loss_classification": loss_classification,
             "equity_curve": equity_curve,
             "trades": trades,
             "orders": orders,
+            "order_events": order_events,
+            "risk_events": risk_events,
             "fills": fills
         }
         self.send_json_response(200, data)
@@ -312,7 +302,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_json_response(200, {"configs": configs})
 
     def handle_list_strategies(self):
-        self.send_json_response(200, {"strategies": STRATEGY_CATALOG})
+        self.send_json_response(200, {"strategies": strategy_catalog()})
 
     def handle_run_simulation(self):
         content_length = int(self.headers.get('Content-Length', 0))
@@ -331,9 +321,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         config_json = params.get("config_json")
         initial_cash_str = params.get("initial_cash", "100000")
         run_id = params.get("run_id", "web-run")
+        overwrite = params.get("overwrite", False)
 
         if not dataset_name and not dataset_path_text:
             self.send_error_json(400, "dataset_name or dataset_path is required")
+            return
+        if not isinstance(overwrite, bool):
+            self.send_error_json(400, "overwrite must be a boolean when provided")
             return
 
         dataset_path = resolve_drop_in_path(dataset_path_text or dataset_name, [DATASETS_DIR, FIXTURES_DIR], expect_dir=True)
@@ -352,6 +346,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         run_id = "".join(c for c in run_id if c.isalnum() or c in "-_").strip()
         if not run_id:
             run_id = "web-run"
+        export_dir = RUNS_DIR / run_id
+        if export_dir.exists() and any(export_dir.iterdir()) and not overwrite:
+            self.send_error_json(409, f"Run {run_id} already exists. Set overwrite=true to replace it.")
+            return
 
         try:
             # 1. Parse config or use defaults
@@ -366,18 +364,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 initial_cash = sim_config.initial_cash
                 strategy = create_strategy(sim_config.strategy_name, sim_config.strategy_params)
                 friction = sim_config.friction
+                execution = sim_config.execution
                 risk_free_rate = sim_config.risk_free_rate
+                risk = sim_config.risk
             elif config_path:
                 sim_config = load_simulation_config(config_path)
                 initial_cash = sim_config.initial_cash
                 strategy = create_strategy(sim_config.strategy_name, sim_config.strategy_params)
                 friction = sim_config.friction
+                execution = sim_config.execution
                 risk_free_rate = sim_config.risk_free_rate
+                risk = sim_config.risk
             else:
                 initial_cash = Decimal(initial_cash_str)
                 strategy = None  # Will default to BuyAndHoldOneUnitStrategy
                 friction = FrictionModel()
+                execution = ExecutionConfig()
                 risk_free_rate = Decimal("0")
+                risk = RiskConfig()
 
             # 2. Run simulation
             result = run_simulation(
@@ -385,7 +389,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 initial_cash=initial_cash,
                 strategy=strategy,
                 friction=friction,
-                risk_free_rate=risk_free_rate
+                risk_free_rate=risk_free_rate,
+                risk=risk,
+                execution=execution,
             )
 
             if result.status != PASS:
@@ -397,17 +403,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
 
             # 3. Export artifacts
-            export_dir = RUNS_DIR / run_id
             export_run_artifacts(
                 result=result,
                 dataset_dir=portable_artifact_path(dataset_path),
                 export_dir=export_dir,
                 run_id=run_id,
-                overwrite=True
+                overwrite=overwrite
             )
 
             # 4. Generate metrics
             write_metrics(export_dir)
+            write_factor_report(export_dir)
+            write_factor_attribution(export_dir)
+            write_factor_risk_model(export_dir)
+            write_loss_classification(export_dir)
 
             self.send_json_response(200, {
                 "success": True,
@@ -442,7 +451,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 def run_server():
     server_address = ('', PORT)
-    httpd = HTTPServer(server_address, DashboardHandler)
+    httpd = ReusableHTTPServer(server_address, DashboardHandler)
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     print(f"\n=========================================")
     print(f"   SystemTradingS3 Interactive Dashboard  ")

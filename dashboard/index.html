@@ -539,6 +539,35 @@
             border-radius: 8px;
         }
 
+        .risk-model-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .risk-model-stat {
+            background-color: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 12px;
+            min-width: 0;
+        }
+
+        .risk-model-label {
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .risk-model-value {
+            color: var(--text-main);
+            font-family: var(--font-title);
+            font-size: 1rem;
+            overflow-wrap: anywhere;
+        }
+
         /* --- Modal (Simulate Panel) --- */
         .modal-overlay {
             position: fixed;
@@ -649,6 +678,22 @@
             font-size: 0.75rem;
             color: var(--text-muted);
             line-height: 1.4;
+        }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .checkbox-row input {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--primary);
         }
 
         .btn-submit {
@@ -864,7 +909,7 @@
         </section>
 
         <!-- Trades & Audit row -->
-        <section class="charts-row" style="grid-template-columns: 3fr 2fr;">
+        <section class="charts-row" style="grid-template-columns: 2fr 1fr 1fr;">
             <!-- Trades List Table Card -->
             <div class="section-card">
                 <div class="section-header">
@@ -894,6 +939,21 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- Factor Risk Model Card -->
+            <div class="section-card">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i data-lucide="activity" style="color: var(--accent-cyan); width: 20px;"></i> Factor Risk Model
+                    </h3>
+                </div>
+                <div id="factorRiskModelContainer">
+                    <div class="audit-no-warnings">
+                        <i data-lucide="circle-dashed" style="color: var(--text-muted);"></i>
+                        <span>No factor risk model loaded.</span>
+                    </div>
                 </div>
             </div>
 
@@ -958,6 +1018,10 @@
                     <label class="form-label" for="runId">실행 식별 ID (Run ID)</label>
                     <input type="text" class="form-control" id="runId" value="custom-run" required>
                 </div>
+                <label class="checkbox-row">
+                    <input type="checkbox" id="overwriteExistingRun">
+                    <span>Overwrite existing run</span>
+                </label>
                 <button type="submit" class="btn-submit">시뮬레이터 가동</button>
             </form>
         </div>
@@ -984,6 +1048,16 @@
             loadRuns();
             loadSimOptions();
         });
+
+        function numericMetric(value) {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+
+        function formatMetric(value, digits, suffix = '', fallback = 'UNAVAILABLE') {
+            const parsed = numericMetric(value);
+            return parsed === null ? fallback : `${parsed.toFixed(digits)}${suffix}`;
+        }
 
         // Fetch all stored runs and load them into the sidebar
         async function loadRuns(selectRunId = null) {
@@ -1013,7 +1087,7 @@
                     if (run.audit_status === 'FAIL') badgeClass = 'badge-fail';
                     else if (run.audit_status === 'INCONCLUSIVE') badgeClass = 'badge-inc';
 
-                    const retVal = run.total_return !== null ? `${run.total_return.toFixed(2)}%` : '-';
+                    const retVal = formatMetric(run.total_return, 2, '%', '-');
 
                     li.innerHTML = `
                         <div class="run-item-header">
@@ -1050,15 +1124,17 @@
                 // 1. Title and header badges
                 document.getElementById('headerRunId').textContent = data.run_id;
                 document.getElementById('headerStrategy').innerHTML = `<i data-lucide="cpu" style="width: 14px; height: 14px;"></i> 전략: ${data.manifest.strategy_name || '-'}`;
-                document.getElementById('headerDataset').innerHTML = `<i data-lucide="database" style="width: 14px; height: 14px;"></i> 데이터셋: ${data.manifest.dataset || '-'}`;
+                document.getElementById('headerDataset').innerHTML = `<i data-lucide="database" style="width: 14px; height: 14px;"></i> 데이터셋: ${data.manifest.dataset_dir || '-'}`;
                 
-                const auditStatus = data.manifest.audit_status || 'Unknown';
+                const artifactAuditStatus = data.audit_summary?.audit_status || 'Unknown';
+                const inputAuditStatus = data.manifest.input_audit_status || 'Unknown';
                 let badgeClass = 'badge-pass';
-                if (auditStatus === 'FAIL') badgeClass = 'badge-fail';
-                else if (auditStatus === 'INCONCLUSIVE') badgeClass = 'badge-inc';
+                if (artifactAuditStatus === 'FAIL') badgeClass = 'badge-fail';
+                else if (artifactAuditStatus === 'INCONCLUSIVE') badgeClass = 'badge-inc';
                 
                 document.getElementById('headerBadgeContainer').innerHTML = `
-                    <span class="run-item-badge ${badgeClass}" style="font-size: 0.95rem; padding: 6px 14px; border-radius: 8px;">감사: ${auditStatus}</span>
+                    <span class="run-item-badge ${badgeClass}" style="font-size: 0.95rem; padding: 6px 14px; border-radius: 8px;">Artifact Audit: ${artifactAuditStatus}</span>
+                    <span class="run-item-badge badge-pass" style="font-size: 0.95rem; padding: 6px 14px; border-radius: 8px;">Input Audit: ${inputAuditStatus}</span>
                 `;
 
                 // Recreate icons inside header
@@ -1068,26 +1144,29 @@
                 const m = data.metrics || {};
                 const summary = data.account_summary || {};
                 
-                document.getElementById('metricTotalReturn').textContent = m.total_return_pct !== undefined ? `${m.total_return_pct.toFixed(2)}%` : '-';
-                document.getElementById('metricCAGR').textContent = m.cagr_pct !== undefined ? `${m.cagr_pct.toFixed(2)}%` : '-';
+                document.getElementById('metricTotalReturn').textContent = formatMetric(m.total_return_pct, 2, '%', '-');
+                document.getElementById('metricCAGR').textContent = formatMetric(m.cagr_pct, 2, '%', '-');
                 
-                const mddVal = m.max_drawdown_pct !== undefined ? `${m.max_drawdown_pct.toFixed(2)}%` : '-';
+                const mddVal = formatMetric(m.max_drawdown_pct, 2, '%', '-');
                 document.getElementById('metricMDD').textContent = mddVal;
                 
-                document.getElementById('metricSharpe').textContent = m.sharpe_ratio !== undefined ? m.sharpe_ratio.toFixed(2) : '-';
+                document.getElementById('metricSharpe').textContent = formatMetric(m.benchmark_relative?.sharpe_ratio, 2, '', '-');
                 
-                document.getElementById('metricAlpha').textContent = (m.benchmark_relative && m.benchmark_relative.alpha_pct !== null) ? `${m.benchmark_relative.alpha_pct.toFixed(2)}%` : 'UNAVAILABLE';
-                document.getElementById('metricBeta').textContent = (m.benchmark_relative && m.benchmark_relative.beta !== null) ? m.benchmark_relative.beta.toFixed(2) : 'UNAVAILABLE';
+                document.getElementById('metricAlpha').textContent = formatMetric(m.benchmark_relative?.alpha_pct, 2, '%');
+                document.getElementById('metricBeta').textContent = formatMetric(m.benchmark_relative?.beta, 2);
                 
-                document.getElementById('metricWinRate').textContent = m.win_rate_pct !== undefined ? `${m.win_rate_pct.toFixed(1)}%` : '-';
-                const pfVal = m.profit_factor !== undefined ? (typeof m.profit_factor === 'number' ? m.profit_factor.toFixed(2) : m.profit_factor) : '-';
+                document.getElementById('metricWinRate').textContent = formatMetric(m.win_rate_pct, 1, '%', '-');
+                const pfVal = m.profit_factor !== undefined ? (numericMetric(m.profit_factor) === null ? m.profit_factor : formatMetric(m.profit_factor, 2, '', '-')) : '-';
                 document.getElementById('metricProfitFactor').textContent = `Profit Factor: ${pfVal}`;
 
-                const tradeCount = m.total_trades !== undefined ? m.total_trades : (data.trades ? data.trades.length : 0);
-                document.getElementById('metricTradeCount').textContent = `${tradeCount}회`;
+                const tradeCount = m.total_number_of_trades !== undefined ? m.total_number_of_trades : (data.trades ? data.trades.length : 0);
+                document.getElementById('metricTradeCount').textContent = `${tradeCount}`;
 
-                const totalCost = (summary.total_fees || 0) + (summary.total_slippage || 0);
-                document.getElementById('metricFriction').textContent = `비용: ${totalCost.toFixed(2)} USD (F: ${summary.total_fees?.toFixed(1) || 0} / S: ${summary.total_slippage?.toFixed(1) || 0})`;
+                const totalFees = numericMetric(summary.total_fees) || 0;
+                const totalSlippage = numericMetric(summary.total_slippage) || 0;
+                const totalCost = totalFees + totalSlippage;
+                const turnoverRatio = formatMetric(m.turnover?.turnover_ratio, 2, 'x', '-');
+                document.getElementById('metricFriction').textContent = `Turnover: ${turnoverRatio} | Cost: ${totalCost.toFixed(2)} USD`;
 
                 // 3. Render Equity Chart & Drawdown Chart
                 renderCharts(data.equity_curve);
@@ -1096,7 +1175,10 @@
                 currentTrades = data.trades || [];
                 renderTradesTable(currentTrades);
 
-                // 5. Render Audit details
+                // 5. Render analysis details
+                renderFactorRiskModel(data.factor_risk_model);
+
+                // 6. Render Audit details
                 renderAuditLog(data.audit_summary);
 
             } catch (err) {
@@ -1294,13 +1376,88 @@
             renderTradesTable(filtered);
         }
 
+        function renderFactorRiskModel(model) {
+            const container = document.getElementById('factorRiskModelContainer');
+            container.innerHTML = '';
+            if (!model || !model.schema_version) {
+                container.innerHTML = `
+                    <div class="audit-warning-item">
+                        <i data-lucide="alert-triangle" style="width: 16px; height: 16px;"></i>
+                        <span>factor_risk_model.json is missing.</span>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            const status = model.status || 'UNKNOWN';
+            const statusClass = status === 'PASS' ? 'badge-pass' : (status === 'FAIL' ? 'badge-fail' : 'badge-inc');
+            const stats = [
+                ['Status', status],
+                ['Dependent', model.dependent_variable || 'UNAVAILABLE'],
+                ['Observations', model.observation_count ?? 0],
+                ['Factors', model.factor_count ?? 0],
+                ['R2', model.r_squared || 'UNAVAILABLE'],
+                ['Schema', model.schema_version],
+            ];
+            const statsHtml = stats.map(([label, value]) => `
+                <div class="risk-model-stat">
+                    <div class="risk-model-label">${label}</div>
+                    <div class="risk-model-value">${value}</div>
+                </div>
+            `).join('');
+
+            const coefficients = model.coefficients || {};
+            const coefficientNames = Object.keys(coefficients);
+            const coefficientsHtml = coefficientNames.length > 0
+                ? `<div class="audit-warnings-container" style="max-height: 140px; margin-top: 12px;">
+                    ${coefficientNames.map(name => `
+                        <div class="audit-warning-item" style="color: var(--text-main); border-color: var(--border-color); background-color: var(--bg-sidebar);">
+                            <i data-lucide="sigma" style="width: 16px; height: 16px;"></i>
+                            <span>${name}: ${coefficients[name]}</span>
+                        </div>
+                    `).join('')}
+                </div>`
+                : '';
+
+            const gaps = Array.isArray(model.gaps) ? model.gaps : [];
+            const gapsHtml = gaps.length > 0
+                ? `<div class="audit-warnings-container" style="max-height: 150px; margin-top: 12px;">
+                    ${gaps.map(gap => `
+                        <div class="audit-warning-item">
+                            <i data-lucide="alert-triangle" style="width: 16px; height: 16px;"></i>
+                            <span>${gap}</span>
+                        </div>
+                    `).join('')}
+                </div>`
+                : `<div class="audit-no-warnings" style="margin-top: 12px;">
+                    <i data-lucide="check-circle" style="color: var(--success);"></i>
+                    <span>No factor model gaps.</span>
+                </div>`;
+
+            container.innerHTML = `
+                <div style="margin-bottom: 12px;">
+                    <span class="run-item-badge ${statusClass}" style="font-size: 0.8rem; padding: 5px 10px;">${status}</span>
+                </div>
+                <div class="risk-model-grid">${statsHtml}</div>
+                ${coefficientsHtml}
+                ${gapsHtml}
+            `;
+            lucide.createIcons();
+        }
+
         // Render audit alerts
         function renderAuditLog(auditSummary) {
             const container = document.getElementById('auditLogContainer');
             container.innerHTML = '';
 
-            const gaps = auditSummary.gaps || [];
-            const errors = auditSummary.errors || [];
+            const issues = Array.isArray(auditSummary.issues) ? auditSummary.issues : [];
+            const gaps = issues
+                .filter(issue => issue.severity === 'gap')
+                .map(issue => `${issue.file}: ${issue.message}`);
+            const errors = issues
+                .filter(issue => issue.severity === 'error')
+                .map(issue => `${issue.file}: ${issue.message}`);
             
             if (gaps.length === 0 && errors.length === 0) {
                 container.innerHTML = `
@@ -1550,6 +1707,7 @@
             const config_path = document.getElementById('configSelect').value || null;
             const initial_cash = document.getElementById('initialCash').value;
             const run_id = document.getElementById('runId').value;
+            const overwrite = document.getElementById('overwriteExistingRun').checked;
             const configText = document.getElementById('strategyConfigJson').value.trim();
             let config_json = null;
             if (configText) {
@@ -1573,7 +1731,8 @@
                         config_path,
                         config_json,
                         initial_cash,
-                        run_id
+                        run_id,
+                        overwrite
                     })
                 });
 

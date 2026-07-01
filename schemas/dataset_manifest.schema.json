@@ -1,0 +1,10 @@
+{
+  "schema_version": "mvp11.dataset_manifest_contract.v1",
+  "description": "Recommended provenance contract for simulator input datasets.",
+  "required_keys": ["schema_version", "dataset_id", "files"],
+  "optional_keys": ["data_policy", "symbol_count", "symbols", "timestamp_start", "timestamp_end", "universe"],
+  "file_contracts": {
+    "required_any": ["market_prices.csv", "*_prices.csv"],
+    "optional": ["benchmark_prices.csv", "factors.csv", "dataset_manifest.json"]
+  }
+}

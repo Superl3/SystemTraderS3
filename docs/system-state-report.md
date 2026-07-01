@@ -17,6 +17,9 @@ fixture/config
   -> validate_run accounting replay
   -> metrics
   -> factor_report
+  -> factor_attribution
+  -> factor_risk_model
+  -> loss_classification
   -> optional local dashboard
 ```
 
@@ -27,6 +30,8 @@ fixture/config
 - `validate_run`: 생성된 artifact의 독립 회계 재검증
 - `metrics`: artifact 기반 사후 지표 계산
 - `factor_report`: fill과 factor data를 연결해 buy-side factor exposure 정렬 상태를 보고
+- `factor_attribution`: holdings/fills/prices/factor ranks 기반 factor-return proxy와 PnL reconciliation 보고
+- `factor_risk_model`: 충분한 complete observations와 복수 factor가 있을 때만 deterministic OLS risk model 보고
 
 이 구조 덕분에 live trading, broker integration, optimization, ML 없이도 재현 가능한 신뢰층이 생겼다. 시스템은 계속 profit promise를 하지 않는 방향을 유지해야 한다.
 
@@ -313,7 +318,7 @@ rtk python -m system_trading_s3.factor_report <run_artifact_dir>
 
 - `validate_run runs/demo-run`: `PASS`
 - `metrics runs/demo-run`: `PASS`
-- `audit runs/demo-run`: 선택적 `benchmark.csv`, `factor_exposure.csv` 누락으로 `INCONCLUSIVE`
+- `audit runs/demo-run`: `PASS` after optional `benchmark.csv` and `factor_exposure.csv` exports are present
 
 안정화 반영:
 
@@ -434,19 +439,19 @@ rtk git diff --check
 
 ## 다음 방향성 논의 후보
 
-안정화 이후 다음 후보는 세 가지다.
+남은 후보는 신규 기반 작업이 아니라 현재 기반을 더 정교하게 만드는 쪽이다.
 
-1. Full factor attribution
+1. Richer statistical multi-factor risk attribution
 
-   현재 `factor_report`는 buy fill의 factor 정렬 상태만 확인한다. 다음 단계는 보유 기간별 factor exposure와 equity movement를 연결하는 attribution이다.
+   Current `factor_risk_model.json` gates deterministic OLS on top of `factor_attribution.json`. Later work can add rolling windows, confidence diagnostics, target exposure definitions, and model comparison.
 
-2. Loss classification groundwork
+2. Richer loss classification
 
-   normal factor-driven loss, excessive relative loss, execution loss, data/system error loss 같은 분류 체계를 artifact 기반으로 만들 수 있다. 단, 너무 빨리 넓히면 복잡도가 커진다.
+   Current `loss_classification.json` separates benchmark-explained, excess relative, strategy-specific, and data-gap loss periods. Later work can add finer execution, data, and system-loss classes.
 
-3. Risk rule engine v0
+3. Richer risk rule policies
 
-   position/exposure/cash/cooldown/kill switch 같은 base rule을 engine 앞단에 넣는다. 실제 시스템 트레이딩 MVP로 가려면 중요하지만, factor reporting보다 구현 범위가 크다.
+   Current risk rules cover position weight, cash buffer, order notional, cooldown, and drawdown rejection. Later work can add portfolio-level exposure budgets and richer policy reporting.
 
 추천은 1번이다. 다음 제품 질문은 "수익이 났나?"가 아니라 아래여야 한다.
 

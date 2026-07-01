@@ -47,6 +47,10 @@ class FactorReportTests(unittest.TestCase):
         self.assertEqual(1, momentum["best_buy_factor_rank"])
         self.assertEqual(1, momentum["worst_buy_factor_rank"])
         self.assertEqual(2, momentum["top_rank_buy_count"])
+        held_momentum = payload["holding_factor_exposure"]["momentum"]
+        self.assertEqual(3, held_momentum["held_observation_count"])
+        self.assertEqual("1.300000", held_momentum["average_held_factor_value"])
+        self.assertEqual(0, held_momentum["missing_held_factor_count"])
         self.assertEqual([], payload["gaps"])
         self.assertIn("not a profitability claim", payload["interpretation"])
 

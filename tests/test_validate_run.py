@@ -81,7 +81,7 @@ class ValidateRunTests(unittest.TestCase):
             result = validate_run.validate_run_artifacts(run_dir)
         self.assertEqual(validate_run.PASS, result.status)
         self.assertEqual("mvp3-test", result.run_id)
-        self.assertEqual("buy_and_hold_one_unit", result.strategy_name)
+        self.assertEqual("RoundTripBuyAndHold", result.strategy_name)
         self.assertEqual(2, result.order_count)
         self.assertEqual(2, result.fill_count)
         self.assertEqual(Decimal("100002"), result.replayed_final_cash)
@@ -195,6 +195,32 @@ class ValidateRunTests(unittest.TestCase):
             result = validate_run.validate_run_artifacts(run_dir)
         self.assertEqual(validate_run.FAIL, result.status)
         self.assertTrue(any("audit_status" in error for error in result.errors))
+
+    def test_order_lifecycle_event_mismatch_fails_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = export_fixture_run(Path(tmp))
+            rewrite_csv(
+                run_dir / "order_events.csv",
+                lambda row: row.update({"remaining_quantity": "1"}) if row["event_type"] == "filled" else None,
+            )
+            result = validate_run.validate_run_artifacts(run_dir)
+
+        self.assertEqual(validate_run.FAIL, result.status)
+        self.assertTrue(any("remaining_quantity" in error for error in result.errors))
+
+    def test_risk_event_mismatch_fails_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = export_fixture_run(Path(tmp))
+            (run_dir / "risk_events.csv").write_text(
+                "event_id,timestamp,order_id,symbol,rule,action,original_quantity,adjusted_quantity,message\n"
+                "R999999,2026-01-01T09:30:00,O000001,SIM,max_order_notional,adjusted,1,0,bad\n",
+                encoding="utf-8",
+                newline="",
+            )
+            result = validate_run.validate_run_artifacts(run_dir)
+
+        self.assertEqual(validate_run.FAIL, result.status)
+        self.assertTrue(any("adjusted quantity" in error for error in result.errors))
 
     def test_repeated_validation_output_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

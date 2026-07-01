@@ -50,6 +50,29 @@ class FillArtifact:
 
 
 @dataclass(frozen=True)
+class OrderEventArtifact:
+    event_id: str
+    order_id: str
+    timestamp: datetime
+    event_type: str
+    status: str
+    filled_quantity: Decimal
+    remaining_quantity: Decimal
+
+
+@dataclass(frozen=True)
+class RiskEventArtifact:
+    event_id: str
+    timestamp: datetime
+    order_id: str
+    symbol: str
+    rule: str
+    action: str
+    original_quantity: Decimal
+    adjusted_quantity: Decimal
+
+
+@dataclass(frozen=True)
 class EquityArtifact:
     timestamp: str
     equity: Decimal
@@ -80,9 +103,7 @@ class RunValidationResult:
 def validate_run_artifacts(run_artifact_dir: Path | str) -> RunValidationResult:
     run_dir = Path(run_artifact_dir)
     errors: list[str] = []
-    gaps_or_limitations = [
-        "trades/fills consistency is checked only at the current MVP2 fill-to-trade mapping level.",
-    ]
+    gaps_or_limitations: list[str] = []
 
     try:
         _require_artifacts(run_dir)
@@ -90,6 +111,8 @@ def validate_run_artifacts(run_artifact_dir: Path | str) -> RunValidationResult:
         account_summary = _load_json(run_dir / "account_summary.json")
         audit_summary = _load_json(run_dir / "audit_summary.json")
         orders = _load_orders(run_dir / "orders.csv")
+        order_events = _load_order_events(run_dir / "order_events.csv")
+        risk_events = _load_risk_events(run_dir / "risk_events.csv")
         fills = _load_fills(run_dir / "fills.csv")
         equity_curve = _load_equity_curve(run_dir / "equity_curve.csv")
         trades = _load_csv_dicts(run_dir / "trades.csv")
@@ -114,6 +137,8 @@ def validate_run_artifacts(run_artifact_dir: Path | str) -> RunValidationResult:
 
     _validate_manifest(manifest, account_summary, errors)
     _validate_order_fill_consistency(orders, fills, errors)
+    _validate_order_lifecycle_events(orders, fills, order_events, errors)
+    _validate_risk_events(orders, risk_events, errors)
     _validate_fill_costs(fills, errors)
     replay_cash, replay_positions = _replay_account(account_summary, fills, errors)
     replay_equity = _validate_equity(equity_curve, account_summary, replay_cash, replay_positions, errors)
@@ -250,6 +275,75 @@ def _load_fills(path: Path) -> list[FillArtifact]:
     return fills
 
 
+def _load_order_events(path: Path) -> list[OrderEventArtifact]:
+    rows = _load_csv_dicts(path)
+    events: list[OrderEventArtifact] = []
+    seen: set[str] = set()
+    required = ["event_id", "order_id", "timestamp", "event_type", "status", "filled_quantity", "remaining_quantity"]
+    for index, row in enumerate(rows, start=2):
+        _require_columns(path.name, row, required)
+        event_id = _required_text(path.name, index, row, "event_id")
+        if event_id in seen:
+            raise RunValidationError(f"order_events.csv row {index} duplicate event_id: {event_id}.")
+        seen.add(event_id)
+        event_type = _required_text(path.name, index, row, "event_type")
+        status = _required_text(path.name, index, row, "status")
+        if event_type not in {"accepted", "filled", "partially_filled", "cancelled", "rejected"}:
+            raise RunValidationError(f"order_events.csv row {index} has unsupported event_type {event_type}.")
+        if status not in {"accepted", "partially_filled", "filled", "cancelled", "rejected"}:
+            raise RunValidationError(f"order_events.csv row {index} has unsupported status {status}.")
+        events.append(
+            OrderEventArtifact(
+                event_id=event_id,
+                order_id=_required_text(path.name, index, row, "order_id"),
+                timestamp=_parse_datetime(path.name, index, row["timestamp"]),
+                event_type=event_type,
+                status=status,
+                filled_quantity=_parse_decimal(path.name, index, "filled_quantity", row["filled_quantity"]),
+                remaining_quantity=_parse_decimal(path.name, index, "remaining_quantity", row["remaining_quantity"]),
+            )
+        )
+    return events
+
+
+def _load_risk_events(path: Path) -> list[RiskEventArtifact]:
+    rows = _load_csv_dicts(path)
+    events: list[RiskEventArtifact] = []
+    seen: set[str] = set()
+    required = [
+        "event_id",
+        "timestamp",
+        "order_id",
+        "symbol",
+        "rule",
+        "action",
+        "original_quantity",
+        "adjusted_quantity",
+    ]
+    for index, row in enumerate(rows, start=2):
+        _require_columns(path.name, row, required)
+        event_id = _required_text(path.name, index, row, "event_id")
+        if event_id in seen:
+            raise RunValidationError(f"risk_events.csv row {index} duplicate event_id: {event_id}.")
+        seen.add(event_id)
+        action = _required_text(path.name, index, row, "action")
+        if action not in {"adjusted", "rejected"}:
+            raise RunValidationError(f"risk_events.csv row {index} has unsupported action {action}.")
+        events.append(
+            RiskEventArtifact(
+                event_id=event_id,
+                timestamp=_parse_datetime(path.name, index, row["timestamp"]),
+                order_id=_required_text(path.name, index, row, "order_id"),
+                symbol=_required_text(path.name, index, row, "symbol"),
+                rule=_required_text(path.name, index, row, "rule"),
+                action=action,
+                original_quantity=_parse_decimal(path.name, index, "original_quantity", row["original_quantity"]),
+                adjusted_quantity=_parse_decimal(path.name, index, "adjusted_quantity", row["adjusted_quantity"]),
+            )
+        )
+    return events
+
+
 def _load_equity_curve(path: Path) -> list[EquityArtifact]:
     rows = _load_csv_dicts(path)
     equity_rows: list[EquityArtifact] = []
@@ -326,14 +420,87 @@ def _validate_order_fill_consistency(orders: list[OrderArtifact], fills: list[Fi
         filled_quantities[fill.order_id] += fill.quantity
         if filled_quantities[fill.order_id] > order.quantity:
             errors.append(f"fills.csv fill quantity exceeds order quantity for order_id {fill.order_id}.")
-        if order.status != "filled":
-            errors.append(f"fills.csv fill_id {fill.fill_id} references non-filled order {fill.order_id}.")
+        if order.status not in {"filled", "partially_filled"}:
+            errors.append(f"fills.csv fill_id {fill.fill_id} references non-fillable order {fill.order_id}.")
 
     for order in orders:
-        if order.status not in {"filled"}:
-            errors.append(f"orders.csv order_id {order.order_id} has unsupported MVP3 status {order.status}.")
-        if order.status == "filled" and filled_quantities.get(order.order_id, Decimal("0")) == 0:
-            errors.append(f"orders.csv order_id {order.order_id} is filled but has no fill.")
+        filled_quantity = filled_quantities.get(order.order_id, Decimal("0"))
+        if order.status not in {"filled", "partially_filled"}:
+            errors.append(f"orders.csv order_id {order.order_id} has unsupported status {order.status}.")
+        if order.status == "filled" and filled_quantity != order.quantity:
+            errors.append(f"orders.csv order_id {order.order_id} is filled but fill quantity does not equal order quantity.")
+        if order.status == "partially_filled" and not (Decimal("0") < filled_quantity < order.quantity):
+            errors.append(f"orders.csv order_id {order.order_id} is partially_filled but fill quantity is not partial.")
+
+
+def _validate_order_lifecycle_events(
+    orders: list[OrderArtifact],
+    fills: list[FillArtifact],
+    events: list[OrderEventArtifact],
+    errors: list[str],
+) -> None:
+    orders_by_id = {order.order_id: order for order in orders}
+    fills_by_order_id: dict[str, list[FillArtifact]] = {}
+    for fill in fills:
+        fills_by_order_id.setdefault(fill.order_id, []).append(fill)
+
+    events_by_order_id: dict[str, list[OrderEventArtifact]] = {}
+    for event in events:
+        if event.order_id not in orders_by_id:
+            errors.append(f"order_events.csv event_id {event.event_id} references unknown order_id {event.order_id}.")
+            continue
+        if event.filled_quantity < 0:
+            errors.append(f"order_events.csv event_id {event.event_id} has negative filled_quantity.")
+        if event.remaining_quantity < 0:
+            errors.append(f"order_events.csv event_id {event.event_id} has negative remaining_quantity.")
+        events_by_order_id.setdefault(event.order_id, []).append(event)
+
+    for order in orders:
+        order_events = sorted(events_by_order_id.get(order.order_id, []), key=lambda item: (item.timestamp, item.event_id))
+        if not order_events:
+            errors.append(f"orders.csv order_id {order.order_id} has no lifecycle events.")
+            continue
+        if order_events[0].event_type != "accepted":
+            errors.append(f"orders.csv order_id {order.order_id} first lifecycle event is not accepted.")
+        fill_quantity = sum((fill.quantity for fill in fills_by_order_id.get(order.order_id, [])), Decimal("0"))
+        if order.status == "filled":
+            if order_events[-1].event_type != "filled":
+                errors.append(f"orders.csv order_id {order.order_id} final lifecycle event is not filled.")
+            if order_events[-1].filled_quantity != order.quantity:
+                errors.append(f"order_events.csv final filled_quantity does not match order quantity for {order.order_id}.")
+            if order_events[-1].remaining_quantity != 0:
+                errors.append(f"order_events.csv final remaining_quantity is not zero for {order.order_id}.")
+            if fill_quantity != order.quantity:
+                errors.append(f"fills.csv fill quantity does not match lifecycle-filled order quantity for {order.order_id}.")
+        elif order.status == "partially_filled":
+            if order_events[-1].event_type != "cancelled":
+                errors.append(f"orders.csv order_id {order.order_id} final lifecycle event is not cancelled.")
+            partial_events = [event for event in order_events if event.event_type == "partially_filled"]
+            if not partial_events:
+                errors.append(f"orders.csv order_id {order.order_id} has no partially_filled lifecycle event.")
+            if not (Decimal("0") < fill_quantity < order.quantity):
+                errors.append(f"fills.csv fill quantity does not match partially-filled order quantity for {order.order_id}.")
+            expected_remaining = order.quantity - fill_quantity
+            if order_events[-1].remaining_quantity != expected_remaining:
+                errors.append(f"order_events.csv final remaining_quantity does not match unfilled quantity for {order.order_id}.")
+            partial_filled_total = sum((event.filled_quantity for event in partial_events), Decimal("0"))
+            if partial_filled_total != fill_quantity:
+                errors.append(f"order_events.csv partial filled_quantity does not match fills.csv quantity for {order.order_id}.")
+
+
+def _validate_risk_events(orders: list[OrderArtifact], risk_events: list[RiskEventArtifact], errors: list[str]) -> None:
+    order_ids = {order.order_id for order in orders}
+    for event in risk_events:
+        if event.action == "adjusted" and event.order_id not in order_ids:
+            errors.append(f"risk_events.csv event_id {event.event_id} adjusted unknown order_id {event.order_id}.")
+        if event.original_quantity <= 0:
+            errors.append(f"risk_events.csv event_id {event.event_id} has nonpositive original_quantity.")
+        if event.adjusted_quantity < 0:
+            errors.append(f"risk_events.csv event_id {event.event_id} has negative adjusted_quantity.")
+        if event.action == "adjusted" and event.adjusted_quantity <= 0:
+            errors.append(f"risk_events.csv event_id {event.event_id} adjusted quantity must be positive.")
+        if event.action == "rejected" and event.adjusted_quantity != 0:
+            errors.append(f"risk_events.csv event_id {event.event_id} rejected quantity must be zero.")
 
 
 def _validate_fill_costs(fills: list[FillArtifact], errors: list[str]) -> None:

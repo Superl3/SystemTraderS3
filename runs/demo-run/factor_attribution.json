@@ -1,0 +1,114 @@
+{
+  "dataset_dir": "C:\\Users\\bug95\\OneDrive\\Documents\\S3Trader\\SystemTraderS3\\tests\\fixtures\\valid_multisymbol",
+  "factor_file": "C:\\Users\\bug95\\OneDrive\\Documents\\S3Trader\\SystemTraderS3\\tests\\fixtures\\valid_multisymbol\\factors.csv",
+  "factor_names": [
+    "momentum"
+  ],
+  "gaps": [],
+  "interpretation": "Factor attribution is a deterministic factor-return proxy plus PnL reconciliation from holdings, fills, prices, and factor ranks; it is not a multi-factor regression model or a profitability claim.",
+  "periods": [
+    {
+      "active_return": "-0.000996",
+      "benchmark_return": "0.010000",
+      "end_timestamp": "2026-01-02",
+      "factor_return_proxy": {
+        "momentum": {
+          "factor_spread_return": "0.010000",
+          "held_symbol_count": 1,
+          "portfolio_exposure": "1.200000",
+          "priced_symbol_count": 2,
+          "proxy_contribution": "0.012000"
+        }
+      },
+      "pnl_attribution": {
+        "equity_change": "9.000000",
+        "holding_price_pnl": "9.000000",
+        "missing_price_symbols": [],
+        "period_fill_count": 0,
+        "trade_cashflow_impact": "0.000000",
+        "trading_costs": "0.000000",
+        "unexplained_pnl": "0.000000"
+      },
+      "return_decomposition": {
+        "active_residual_return": "-0.012996",
+        "active_return": "-0.000996",
+        "benchmark_return": "0.010000",
+        "factor_proxy_total_contribution": "0.012000",
+        "strategy_residual_return": "-0.002996",
+        "strategy_return": "0.009004"
+      },
+      "start_timestamp": "2026-01-01",
+      "strategy_return": "0.009004"
+    },
+    {
+      "active_return": "-0.011844",
+      "benchmark_return": "0.019802",
+      "end_timestamp": "2026-01-03",
+      "factor_return_proxy": {
+        "momentum": {
+          "factor_spread_return": "-0.090099",
+          "held_symbol_count": 1,
+          "portfolio_exposure": "1.200000",
+          "priced_symbol_count": 2,
+          "proxy_contribution": "-0.108119"
+        }
+      },
+      "pnl_attribution": {
+        "equity_change": "8.026000",
+        "holding_price_pnl": "9.000000",
+        "missing_price_symbols": [],
+        "period_fill_count": 2,
+        "trade_cashflow_impact": "-0.974000",
+        "trading_costs": "0.974000",
+        "unexplained_pnl": "0.000000"
+      },
+      "return_decomposition": {
+        "active_residual_return": "0.096275",
+        "active_return": "-0.011844",
+        "benchmark_return": "0.019802",
+        "factor_proxy_total_contribution": "-0.108119",
+        "strategy_residual_return": "0.116077",
+        "strategy_return": "0.007958"
+      },
+      "start_timestamp": "2026-01-02",
+      "strategy_return": "0.007958"
+    }
+  ],
+  "run_id": "demo-run",
+  "schema_version": "mvp12.factor_attribution.v3",
+  "source_files": [
+    "run_manifest.json",
+    "equity_curve.csv",
+    "fills.csv",
+    "factors.csv"
+  ],
+  "status": "PASS",
+  "strategy_name": "PeriodicFactorWeight",
+  "summary": {
+    "factor_summary": {
+      "momentum": {
+        "average_factor_spread_return": "-0.040050",
+        "average_portfolio_exposure": "1.200000",
+        "average_proxy_contribution": "-0.048060",
+        "periods_with_exposure": 2,
+        "periods_with_proxy": 2,
+        "total_proxy_contribution": "-0.096119"
+      }
+    },
+    "period_count": 2,
+    "return_decomposition": {
+      "average_active_residual_return": "0.041640",
+      "average_active_return": "-0.006420",
+      "average_factor_proxy_total_contribution": "-0.048060",
+      "average_strategy_residual_return": "0.056541",
+      "average_strategy_return": "0.008481",
+      "periods_with_active_return": 2,
+      "periods_with_factor_proxy_total": 2,
+      "total_equity_change": "17.026000",
+      "total_holding_price_pnl": "18.000000",
+      "total_trade_cashflow_impact": "-0.974000",
+      "total_trading_costs": "0.974000",
+      "total_unexplained_pnl": "0.000000"
+    }
+  }
+}

@@ -42,6 +42,22 @@ class MetricsResult:
     errors: list[str]
 
 
+@dataclass(frozen=True)
+class TradeOutcomeData:
+    realized_pnls: list[Decimal]
+    total_trade_count: int
+    missing_realized_count: int
+    per_symbol: dict[str, tuple[list[Decimal], int, int]]
+
+
+@dataclass(frozen=True)
+class TurnoverData:
+    fill_count: int
+    buy_notional: Decimal
+    sell_notional: Decimal
+    missing: bool = False
+
+
 def calculate_metrics(run_artifact_dir: Path | str) -> MetricsResult:
     run_dir = Path(run_artifact_dir)
     errors: list[str] = []
@@ -49,35 +65,42 @@ def calculate_metrics(run_artifact_dir: Path | str) -> MetricsResult:
 
     try:
         equity_rows = _load_equity_rows(run_dir / "equity_curve.csv")
-        realized_pnls, total_trade_count, missing_realized_count = _load_realized_pnls(run_dir / "trades.csv")
+        trade_outcomes = _load_trade_outcomes(run_dir / "trades.csv")
         risk_free_rate = _load_risk_free_rate(run_dir / "run_manifest.json", gaps)
+        turnover_data = _load_turnover_data(run_dir / "fills.csv", gaps)
     except MetricsError as exc:
         return MetricsResult(status=FAIL, payload=_failed_payload([str(exc)]), errors=[str(exc)])
 
     total_return = _total_return_pct(equity_rows, gaps)
     cagr = _cagr_pct(equity_rows, gaps)
     max_drawdown = _max_drawdown_pct(equity_rows, gaps)
+    sortino_ratio = _sortino_ratio(equity_rows, risk_free_rate, gaps)
     _append_sample_size_gaps(equity_rows, gaps)
     win_rate, profit_factor = _trade_outcome_metrics(
-        realized_pnls=realized_pnls,
-        total_trade_count=total_trade_count,
-        missing_realized_count=missing_realized_count,
+        realized_pnls=trade_outcomes.realized_pnls,
+        total_trade_count=trade_outcomes.total_trade_count,
+        missing_realized_count=trade_outcomes.missing_realized_count,
         gaps=gaps,
     )
     benchmark_relative = _benchmark_relative_metrics(equity_rows, risk_free_rate, gaps)
+    per_symbol = _per_symbol_trade_metrics(trade_outcomes.per_symbol)
+    turnover = _turnover_metrics(equity_rows, turnover_data, gaps)
 
     payload: dict[str, Any] = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "status": PASS,
-        "source_files": ["equity_curve.csv", "trades.csv"],
+        "source_files": ["equity_curve.csv", "trades.csv", "fills.csv"],
         "trading_days_per_year": int(TRADING_DAYS_PER_YEAR),
         "total_return_pct": _format_optional_metric(total_return),
         "cagr_pct": _format_optional_metric(cagr),
         "max_drawdown_pct": _format_optional_metric(max_drawdown),
+        "sortino_ratio": _format_optional_metric(sortino_ratio),
         "win_rate_pct": _format_optional_metric(win_rate),
         "profit_factor": _format_profit_factor(profit_factor),
-        "total_number_of_trades": total_trade_count,
-        "realized_trade_count": len(realized_pnls),
+        "total_number_of_trades": trade_outcomes.total_trade_count,
+        "realized_trade_count": len(trade_outcomes.realized_pnls),
+        "per_symbol": per_symbol,
+        "turnover": turnover,
         "benchmark_relative": benchmark_relative,
         "gaps": gaps,
     }
@@ -101,12 +124,23 @@ def format_metrics_result(result: MetricsResult, metrics_path: Path | None = Non
         ("total_return_pct", "TOTAL RETURN PCT"),
         ("cagr_pct", "CAGR PCT"),
         ("max_drawdown_pct", "MAX DRAWDOWN PCT"),
+        ("sortino_ratio", "SORTINO RATIO"),
         ("win_rate_pct", "WIN RATE PCT"),
         ("profit_factor", "PROFIT FACTOR"),
         ("total_number_of_trades", "TOTAL NUMBER OF TRADES"),
     ]:
         if key in payload:
             lines.append(f"{label}: {payload[key]}")
+    turnover = payload.get("turnover")
+    if isinstance(turnover, dict):
+        lines.append("TURNOVER:")
+        for key, label in [
+            ("turnover_ratio", "TURNOVER RATIO"),
+            ("buy_turnover_ratio", "BUY TURNOVER RATIO"),
+            ("sell_turnover_ratio", "SELL TURNOVER RATIO"),
+            ("total_traded_notional", "TOTAL TRADED NOTIONAL"),
+        ]:
+            lines.append(f"- {label}: {turnover.get(key, UNAVAILABLE)}")
     benchmark_relative = payload.get("benchmark_relative")
     if isinstance(benchmark_relative, dict):
         lines.append("BENCHMARK RELATIVE:")
@@ -114,6 +148,8 @@ def format_metrics_result(result: MetricsResult, metrics_path: Path | None = Non
             ("alpha_pct", "ALPHA PCT"),
             ("beta", "BETA"),
             ("sharpe_ratio", "SHARPE RATIO"),
+            ("upside_capture_ratio", "UPSIDE CAPTURE RATIO"),
+            ("downside_capture_ratio", "DOWNSIDE CAPTURE RATIO"),
             ("tracking_error_pct", "TRACKING ERROR PCT"),
             ("information_ratio", "INFORMATION RATIO"),
         ]:
@@ -170,19 +206,53 @@ def _load_equity_rows(path: Path) -> list[EquityMetricRow]:
     return equity_rows
 
 
-def _load_realized_pnls(path: Path) -> tuple[list[Decimal], int, int]:
+def _load_trade_outcomes(path: Path) -> TradeOutcomeData:
     if not path.is_file():
         raise MetricsError("trades.csv is missing.")
     rows = _load_csv_dicts(path)
     realized: list[Decimal] = []
     missing_realized_count = 0
+    per_symbol: dict[str, tuple[list[Decimal], int, int]] = {}
     for index, row in enumerate(rows, start=2):
+        symbol = row.get("symbol", "").strip() or "UNAVAILABLE"
+        symbol_realized, symbol_count, symbol_missing = per_symbol.get(symbol, ([], 0, 0))
+        symbol_count += 1
         value = row.get("realized_pnl", "")
         if audit._is_blank(value):
             missing_realized_count += 1
+            symbol_missing += 1
+            per_symbol[symbol] = (symbol_realized, symbol_count, symbol_missing)
             continue
-        realized.append(_parse_decimal("trades.csv", index, "realized_pnl", value))
-    return realized, len(rows), missing_realized_count
+        parsed = _parse_decimal("trades.csv", index, "realized_pnl", value)
+        realized.append(parsed)
+        symbol_realized.append(parsed)
+        per_symbol[symbol] = (symbol_realized, symbol_count, symbol_missing)
+    return TradeOutcomeData(realized, len(rows), missing_realized_count, dict(sorted(per_symbol.items())))
+
+
+def _load_turnover_data(path: Path, gaps: list[str]) -> TurnoverData:
+    if not path.is_file():
+        gaps.append("turnover unavailable because fills.csv is missing.")
+        return TurnoverData(fill_count=0, buy_notional=Decimal("0"), sell_notional=Decimal("0"), missing=True)
+    rows = _load_csv_dicts(path)
+    buy_notional = Decimal("0")
+    sell_notional = Decimal("0")
+    for index, row in enumerate(rows, start=2):
+        side = row.get("side", "").strip()
+        if side not in {"buy", "sell"}:
+            raise MetricsError(f"fills.csv row {index} has invalid side.")
+        quantity = _parse_decimal("fills.csv", index, "quantity", row.get("quantity", ""))
+        fill_price = _parse_decimal("fills.csv", index, "fill_price", row.get("fill_price", ""))
+        if quantity < 0:
+            raise MetricsError(f"fills.csv row {index} has negative quantity.")
+        if fill_price < 0:
+            raise MetricsError(f"fills.csv row {index} has negative fill_price.")
+        notional = quantity * fill_price
+        if side == "buy":
+            buy_notional += notional
+        else:
+            sell_notional += notional
+    return TurnoverData(fill_count=len(rows), buy_notional=buy_notional, sell_notional=sell_notional)
 
 
 def _load_csv_dicts(path: Path) -> list[dict[str, str]]:
@@ -311,6 +381,58 @@ def _trade_outcome_metrics(
     return win_rate, gross_profit / gross_loss
 
 
+def _per_symbol_trade_metrics(per_symbol: dict[str, tuple[list[Decimal], int, int]]) -> dict[str, dict[str, object]]:
+    payload: dict[str, dict[str, object]] = {}
+    for symbol, (realized_pnls, total_trade_count, missing_realized_count) in sorted(per_symbol.items()):
+        local_gaps: list[str] = []
+        win_rate, profit_factor = _trade_outcome_metrics(
+            realized_pnls=realized_pnls,
+            total_trade_count=total_trade_count,
+            missing_realized_count=missing_realized_count,
+            gaps=local_gaps,
+        )
+        payload[symbol] = {
+            "total_number_of_trades": total_trade_count,
+            "realized_trade_count": len(realized_pnls),
+            "missing_realized_count": missing_realized_count,
+            "total_realized_pnl": _format_optional_metric(sum(realized_pnls, Decimal("0")) if realized_pnls else None),
+            "win_rate_pct": _format_optional_metric(win_rate),
+            "profit_factor": _format_profit_factor(profit_factor),
+            "gaps": local_gaps,
+        }
+    return payload
+
+
+def _turnover_metrics(equity_rows: list[EquityMetricRow], turnover_data: TurnoverData, gaps: list[str]) -> dict[str, object]:
+    unavailable = {
+        "fill_count": turnover_data.fill_count,
+        "buy_notional": _format_optional_metric(turnover_data.buy_notional),
+        "sell_notional": _format_optional_metric(turnover_data.sell_notional),
+        "total_traded_notional": _format_optional_metric(turnover_data.buy_notional + turnover_data.sell_notional),
+        "average_equity": UNAVAILABLE,
+        "turnover_ratio": UNAVAILABLE,
+        "buy_turnover_ratio": UNAVAILABLE,
+        "sell_turnover_ratio": UNAVAILABLE,
+    }
+    if turnover_data.missing:
+        return unavailable
+    average_equity = _mean([row.equity for row in equity_rows])
+    if average_equity <= 0:
+        gaps.append("turnover unavailable because average equity is nonpositive.")
+        return unavailable
+    total_notional = turnover_data.buy_notional + turnover_data.sell_notional
+    return {
+        "fill_count": turnover_data.fill_count,
+        "buy_notional": _format_optional_metric(turnover_data.buy_notional),
+        "sell_notional": _format_optional_metric(turnover_data.sell_notional),
+        "total_traded_notional": _format_optional_metric(total_notional),
+        "average_equity": _format_optional_metric(average_equity),
+        "turnover_ratio": _format_optional_metric(total_notional / average_equity),
+        "buy_turnover_ratio": _format_optional_metric(turnover_data.buy_notional / average_equity),
+        "sell_turnover_ratio": _format_optional_metric(turnover_data.sell_notional / average_equity),
+    }
+
+
 def _benchmark_relative_metrics(
     equity_rows: list[EquityMetricRow],
     risk_free_rate: Decimal,
@@ -345,6 +467,8 @@ def _benchmark_relative_metrics(
         beta = None if covariance is None else covariance / benchmark_variance
 
     sharpe = _sharpe_ratio(strategy_returns, risk_free_rate, gaps)
+    upside_capture = _capture_ratio(strategy_returns, benchmark_returns, positive_benchmark=True, gaps=gaps)
+    downside_capture = _capture_ratio(strategy_returns, benchmark_returns, positive_benchmark=False, gaps=gaps)
     tracking_error = _annualized_std(active_returns)
     information_ratio: Decimal | None = None
     if tracking_error is None:
@@ -361,6 +485,8 @@ def _benchmark_relative_metrics(
         "alpha_pct": _format_optional_metric(alpha),
         "beta": _format_optional_metric(beta),
         "sharpe_ratio": _format_optional_metric(sharpe),
+        "upside_capture_ratio": _format_optional_metric(upside_capture),
+        "downside_capture_ratio": _format_optional_metric(downside_capture),
         "tracking_error_pct": _format_optional_metric(None if tracking_error is None else tracking_error * Decimal("100")),
         "information_ratio": _format_optional_metric(information_ratio),
         "gaps": "; ".join(gaps),
@@ -378,6 +504,8 @@ def _unavailable_benchmark_relative(
         "alpha_pct": UNAVAILABLE,
         "beta": UNAVAILABLE,
         "sharpe_ratio": UNAVAILABLE,
+        "upside_capture_ratio": UNAVAILABLE,
+        "downside_capture_ratio": UNAVAILABLE,
         "tracking_error_pct": UNAVAILABLE,
         "information_ratio": UNAVAILABLE,
         "gaps": "; ".join(gaps),
@@ -438,6 +566,51 @@ def _sharpe_ratio(strategy_returns: list[Decimal], risk_free_rate: Decimal, gaps
         return None
     annualized_return = _mean(strategy_returns) * TRADING_DAYS_PER_YEAR
     return (annualized_return - risk_free_rate) / annualized_std
+
+
+def _sortino_ratio(equity_rows: list[EquityMetricRow], risk_free_rate: Decimal, gaps: list[str]) -> Decimal | None:
+    local_gaps: list[str] = []
+    strategy_returns = _period_returns([row.equity for row in equity_rows], "strategy equity", local_gaps)
+    if strategy_returns is None:
+        gaps.append("sortino_ratio unavailable because strategy returns are insufficient.")
+        return None
+    period_risk_free_rate = risk_free_rate / TRADING_DAYS_PER_YEAR
+    downside_returns = [min(Decimal("0"), value - period_risk_free_rate) for value in strategy_returns]
+    downside_squares = [value * value for value in downside_returns if value < 0]
+    if not downside_squares:
+        gaps.append("sortino_ratio unavailable because no downside returns are present.")
+        return None
+    with localcontext() as context:
+        context.prec = 50
+        annualized_downside_deviation = (_mean(downside_squares) * TRADING_DAYS_PER_YEAR).sqrt()
+    if annualized_downside_deviation == 0:
+        gaps.append("sortino_ratio unavailable because annualized downside deviation is zero.")
+        return None
+    annualized_return = _mean(strategy_returns) * TRADING_DAYS_PER_YEAR
+    return (annualized_return - risk_free_rate) / annualized_downside_deviation
+
+
+def _capture_ratio(
+    strategy_returns: list[Decimal],
+    benchmark_returns: list[Decimal],
+    positive_benchmark: bool,
+    gaps: list[str],
+) -> Decimal | None:
+    if positive_benchmark:
+        selected = [(strategy, benchmark) for strategy, benchmark in zip(strategy_returns, benchmark_returns) if benchmark > 0]
+        label = "upside_capture_ratio"
+    else:
+        selected = [(strategy, benchmark) for strategy, benchmark in zip(strategy_returns, benchmark_returns) if benchmark < 0]
+        label = "downside_capture_ratio"
+    if not selected:
+        gaps.append(f"{label} unavailable because benchmark has no {'positive' if positive_benchmark else 'negative'} return periods.")
+        return None
+    benchmark_average = _mean([benchmark for _, benchmark in selected])
+    if benchmark_average == 0:
+        gaps.append(f"{label} unavailable because selected benchmark return average is zero.")
+        return None
+    strategy_average = _mean([strategy for strategy, _ in selected])
+    return strategy_average / benchmark_average
 
 
 def _format_optional_metric(value: Decimal | None) -> str:

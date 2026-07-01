@@ -1,0 +1,12 @@
+{
+  "schema_version": "mvp13.simulation_config_contract.v1",
+  "description": "Config contract for a deterministic simulated run.",
+  "required_keys": ["initial_cash", "strategy_name", "strategy_params"],
+  "optional_keys": ["friction", "execution", "risk_free_rate", "risk"],
+  "top_level_keys": ["initial_cash", "strategy_name", "strategy_params", "friction", "execution", "risk_free_rate", "risk"],
+  "decimal_string_fields": ["initial_cash", "risk_free_rate"],
+  "friction_keys": ["fee_rate", "slippage_per_trade"],
+  "execution_keys": ["max_fill_quantity", "partial_fill_policy"],
+  "risk_keys": ["max_position_weight", "min_cash_buffer", "max_order_notional", "cooldown_periods", "max_drawdown_pct"],
+  "registered_strategies": ["BuyAndHold", "EqualWeightRebalance", "MovingAverageCross", "PeriodicFactorWeight", "RoundTripBuyAndHold"]
+}

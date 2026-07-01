@@ -3,27 +3,69 @@
     "alpha_pct": "-161.781479",
     "benchmark_available": true,
     "beta": "-0.106724",
-    "gaps": "",
+    "downside_capture_ratio": "UNAVAILABLE",
+    "gaps": "downside_capture_ratio unavailable because benchmark has no negative return periods.",
     "information_ratio": "-18.789079",
     "risk_free_rate": "0.020000",
     "sharpe_ratio": "254.990531",
-    "tracking_error_pct": "8.610400"
+    "tracking_error_pct": "8.610400",
+    "upside_capture_ratio": "0.569163"
   },
   "cagr_pct": "739.963874",
   "gaps": [
-    "realized_pnl missing for 2 of 3 trade rows."
+    "sortino_ratio unavailable because no downside returns are present.",
+    "annualized metrics may be unstable because equity_curve has fewer than 20 rows.",
+    "realized_pnl missing for 2 of 3 trade rows.",
+    "downside_capture_ratio unavailable because benchmark has no negative return periods."
   ],
   "max_drawdown_pct": "0.000000",
+  "per_symbol": {
+    "AAA": {
+      "gaps": [
+        "realized_pnl missing for 1 of 2 trade rows."
+      ],
+      "missing_realized_count": 1,
+      "profit_factor": "INF",
+      "realized_trade_count": 1,
+      "total_number_of_trades": 2,
+      "total_realized_pnl": "17.071000",
+      "win_rate_pct": "100.000000"
+    },
+    "BBB": {
+      "gaps": [
+        "realized_pnl missing for 1 of 1 trade rows.",
+        "win_rate_pct and profit_factor unavailable because no realized_pnl rows are available."
+      ],
+      "missing_realized_count": 1,
+      "profit_factor": "UNAVAILABLE",
+      "realized_trade_count": 0,
+      "total_number_of_trades": 1,
+      "total_realized_pnl": "UNAVAILABLE",
+      "win_rate_pct": "UNAVAILABLE"
+    }
+  },
   "profit_factor": "INF",
   "realized_trade_count": 1,
   "schema_version": "mvp6.metrics.v1",
+  "sortino_ratio": "UNAVAILABLE",
   "source_files": [
     "equity_curve.csv",
-    "trades.csv"
+    "trades.csv",
+    "fills.csv"
   ],
   "status": "PASS",
   "total_number_of_trades": 3,
   "total_return_pct": "1.703384",
   "trading_days_per_year": 252,
+  "turnover": {
+    "average_equity": "1008.215333",
+    "buy_notional": "1890.000000",
+    "buy_turnover_ratio": "1.874600",
+    "fill_count": 3,
+    "sell_notional": "918.000000",
+    "sell_turnover_ratio": "0.910520",
+    "total_traded_notional": "2808.000000",
+    "turnover_ratio": "2.785119"
+  },
   "win_rate_pct": "100.000000"
 }

@@ -1,0 +1,28 @@
+{
+  "coefficients": {},
+  "dependent_variable": "active_return",
+  "factor_count": 1,
+  "factor_names": [
+    "momentum"
+  ],
+  "gaps": [
+    "at least 2 factors are required for a multi-factor risk model; found 1.",
+    "at least 5 complete observations are required for 1 factor(s); found 2."
+  ],
+  "interpretation": "Statistical factor risk model is gated; it reports INCONCLUSIVE unless complete observations and multiple factors are sufficient for a deterministic OLS fit.",
+  "observation_count": 2,
+  "r_squared": "UNAVAILABLE",
+  "requirements": {
+    "complete_rows_required": true,
+    "min_factor_count": 2,
+    "min_observation_count": 5
+  },
+  "residual_summary": {},
+  "run_id": "demo-run",
+  "schema_version": "mvp14.factor_risk_model.v1",
+  "source_files": [
+    "factor_attribution.json"
+  ],
+  "status": "INCONCLUSIVE",
+  "strategy_name": "PeriodicFactorWeight"
+}

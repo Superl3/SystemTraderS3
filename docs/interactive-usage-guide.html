@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SystemTraderS3 한글 인터렉티브 사용 가이드</title>
+  <style>
+    :root {
+      --bg: #101318;
+      --panel: #171b22;
+      --panel-2: #20262f;
+      --line: #343c49;
+      --text: #f3f5f8;
+      --muted: #aab2c0;
+      --soft: #d7dde8;
+      --green: #30c48d;
+      --green-bg: rgba(48, 196, 141, 0.12);
+      --amber: #f3b74f;
+      --amber-bg: rgba(243, 183, 79, 0.13);
+      --red: #f36b6b;
+      --red-bg: rgba(243, 107, 107, 0.13);
+      --blue: #6aa7ff;
+      --blue-bg: rgba(106, 167, 255, 0.13);
+      --violet: #b692ff;
+      --violet-bg: rgba(182, 146, 255, 0.13);
+      --cyan: #54d3dd;
+      --cyan-bg: rgba(84, 211, 221, 0.13);
+      --radius: 8px;
+      --shadow: 0 18px 45px rgba(0, 0, 0, 0.28);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(180deg, rgba(106, 167, 255, 0.08), transparent 260px),
+        var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Malgun Gothic", Arial, sans-serif;
+      line-height: 1.6;
+    }
+
+    a {
+      color: var(--cyan);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 24px 18px;
+      background: rgba(16, 19, 24, 0.94);
+      border-right: 1px solid var(--line);
+      overflow-y: auto;
+    }
+
+    main {
+      padding: 36px;
+      max-width: 1260px;
+      width: 100%;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--blue), var(--green));
+      color: #061014;
+      font-weight: 800;
+    }
+
+    .brand-title {
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .brand-subtitle {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      width: 100%;
+      padding: 10px 12px;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--muted);
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      font: inherit;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      color: var(--text);
+      background: var(--panel);
+      border-color: var(--line);
+    }
+
+    .side-note {
+      margin-top: 24px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 0.88rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .hero {
+      padding: 30px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, rgba(106, 167, 255, 0.14), rgba(48, 196, 141, 0.08)), var(--panel);
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }
+
+    .eyebrow {
+      color: var(--cyan);
+      text-transform: uppercase;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 2.2rem;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 1.45rem;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 1.04rem;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 12px;
+      color: var(--soft);
+    }
+
+    .hero-grid,
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 18px;
+    }
+
+    .card strong {
+      color: var(--text);
+    }
+
+    .section {
+      display: none;
+      margin-top: 22px;
+    }
+
+    .section.active {
+      display: block;
+    }
+
+    .stack {
+      display: grid;
+      gap: 16px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 0.7fr);
+      gap: 16px;
+    }
+
+    .callout {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--blue);
+      border-radius: var(--radius);
+      background: var(--blue-bg);
+      padding: 16px;
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+      background: var(--amber-bg);
+    }
+
+    .callout.danger {
+      border-left-color: var(--red);
+      background: var(--red-bg);
+    }
+
+    .callout.good {
+      border-left-color: var(--green);
+      background: var(--green-bg);
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 16px;
+    }
+
+    .tab {
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .tab.active {
+      color: var(--text);
+      background: var(--panel-2);
+      border-color: var(--blue);
+    }
+
+    .command {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #0b0e13;
+      overflow: hidden;
+    }
+
+    .command-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.88rem;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px;
+      overflow-x: auto;
+      color: #e9edf5;
+      font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+      font-size: 0.92rem;
+      white-space: pre;
+    }
+
+    code {
+      font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+    }
+
+    .copy-btn,
+    .small-btn {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.86rem;
+    }
+
+    .copy-btn:hover,
+    .small-btn:hover {
+      border-color: var(--blue);
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--soft);
+      font-size: 0.84rem;
+    }
+
+    .pill.green {
+      color: var(--green);
+      background: var(--green-bg);
+      border-color: rgba(48, 196, 141, 0.28);
+    }
+
+    .pill.amber {
+      color: var(--amber);
+      background: var(--amber-bg);
+      border-color: rgba(243, 183, 79, 0.28);
+    }
+
+    .pill.red {
+      color: var(--red);
+      background: var(--red-bg);
+      border-color: rgba(243, 107, 107, 0.28);
+    }
+
+    .artifact-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .artifact {
+      min-height: 112px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      cursor: pointer;
+      text-align: left;
+      color: var(--soft);
+      font: inherit;
+    }
+
+    .artifact:hover,
+    .artifact.active {
+      border-color: var(--cyan);
+      background: var(--panel-2);
+    }
+
+    .artifact-name {
+      color: var(--text);
+      font-weight: 700;
+      margin-bottom: 6px;
+      overflow-wrap: anywhere;
+    }
+
+    .artifact-detail {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #0b0e13;
+      padding: 16px;
+      min-height: 180px;
+    }
+
+    .status-board {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .status-card {
+      padding: 16px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .status-card.pass {
+      border-color: rgba(48, 196, 141, 0.32);
+      background: var(--green-bg);
+    }
+
+    .status-card.inconclusive {
+      border-color: rgba(243, 183, 79, 0.32);
+      background: var(--amber-bg);
+    }
+
+    .status-card.fail {
+      border-color: rgba(243, 107, 107, 0.32);
+      background: var(--red-bg);
+    }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      font-weight: 700;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    details > div {
+      padding: 0 16px 16px;
+    }
+
+    .checklist {
+      display: grid;
+      gap: 8px;
+    }
+
+    .check {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .check input {
+      margin-top: 5px;
+      accent-color: var(--green);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    td {
+      color: var(--soft);
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .search {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #0b0e13;
+      color: var(--text);
+      padding: 11px 12px;
+      font: inherit;
+      margin-bottom: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(48, 196, 141, 0.36);
+      background: #10241e;
+      color: var(--text);
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: 0.18s ease;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: relative;
+        height: auto;
+      }
+
+      main {
+        padding: 22px;
+      }
+
+      .hero-grid,
+      .card-grid,
+      .split,
+      .status-board,
+      .artifact-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <div class="brand-mark">S3</div>
+        <div>
+          <div class="brand-title">SystemTraderS3</div>
+          <div class="brand-subtitle">한글 사용법과 한계</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="문서 섹션">
+        <button class="active" data-section="overview">개요</button>
+        <button data-section="quickstart">빠른 시작</button>
+        <button data-section="dashboard">대시보드</button>
+        <button data-section="cli">CLI 파이프라인</button>
+        <button data-section="artifacts">산출물 해석</button>
+        <button data-section="status">상태값과 판단</button>
+        <button data-section="limits">한계와 비목표</button>
+        <button data-section="recipes">상황별 레시피</button>
+      </nav>
+      <div class="side-note">
+        이 문서는 로컬에서 바로 열 수 있는 standalone HTML입니다. 모든 명령은 프로젝트 루트에서 실행하는 것을 기준으로 합니다.
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div class="eyebrow">Simulated trading system guide</div>
+        <h1>SystemTraderS3 사용법과 한계</h1>
+        <p>
+          SystemTraderS3는 수익을 찾아주는 자동매매 봇이 아니라, 파일 기반 데이터로 전략 실행을 재현하고,
+          산출물을 검증하며, 손익과 factor exposure를 설명 가능한 형태로 분해하는 로컬 시뮬레이션 골격입니다.
+        </p>
+        <div class="hero-grid">
+          <div class="card">
+            <h3>무엇을 하나</h3>
+            <p>입력 데이터 감사, 시뮬레이션, artifact export, replay validation, metrics, factor report, factor attribution, gated risk model, loss classification을 수행합니다.</p>
+          </div>
+          <div class="card">
+            <h3>무엇을 하지 않나</h3>
+            <p>실거래, 브로커 API, 수익 예측, 최적화, ML prediction, 레버리지 자동화는 하지 않습니다.</p>
+          </div>
+          <div class="card">
+            <h3>핵심 철학</h3>
+            <p>없는 데이터를 그럴듯하게 만들지 않습니다. 부족하면 <code>INCONCLUSIVE</code>, 깨지면 <code>FAIL</code>로 보고합니다.</p>
+          </div>
+        </div>
+      </header>
+
+      <section id="overview" class="section active">
+        <div class="stack">
+          <div class="split">
+            <div class="card">
+              <h2>전체 흐름</h2>
+              <p>가장 안전한 사용 흐름은 입력을 먼저 감사하고, 시뮬레이션을 export한 뒤, export된 artifact만 다시 검증하고 분석하는 것입니다.</p>
+              <div class="pill-row">
+                <span class="pill">input_audit</span>
+                <span class="pill">simulate</span>
+                <span class="pill">validate_run</span>
+                <span class="pill">metrics</span>
+                <span class="pill">factor_report</span>
+                <span class="pill">factor_attribution</span>
+                <span class="pill">factor_risk_model</span>
+                <span class="pill">loss_classification</span>
+              </div>
+            </div>
+            <div class="callout warning">
+              <h3>중요한 안전선</h3>
+              <p>이 프로그램의 결과는 투자 판단이나 수익 가능성 보장이 아닙니다. 현재 데이터와 규칙으로 run이 어떻게 움직였는지 설명하는 로컬 분석 결과입니다.</p>
+            </div>
+          </div>
+
+          <div class="card-grid">
+            <div class="card">
+              <h3>데이터 객체</h3>
+              <p><code>market_prices.csv</code> 또는 <code>*_prices.csv</code>가 필수입니다. <code>benchmark_prices.csv</code>, <code>factors.csv</code>, <code>dataset_manifest.json</code>은 선택입니다.</p>
+            </div>
+            <div class="card">
+              <h3>전략 객체</h3>
+              <p><code>configs/strategies/*.json</code>에 전략 설정을 둘 수 있습니다. 현재 catalog는 코드가 source-of-truth입니다.</p>
+            </div>
+            <div class="card">
+              <h3>run 객체</h3>
+              <p>export된 run directory는 재현 가능한 artifact 묶음입니다. validation과 분석 계층은 이 디렉터리를 읽습니다.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="quickstart" class="section">
+        <div class="stack">
+          <div class="callout good">
+            <h2>가장 짧은 안전 실행</h2>
+            <p>처음 확인할 때는 테스트 fixture로 run을 만들고 모든 분석 리포트를 순서대로 생성하세요.</p>
+          </div>
+
+          <div class="command">
+            <div class="command-head">
+              <span>PowerShell quickstart</span>
+              <button class="copy-btn" data-copy="quickstart-code">복사</button>
+            </div>
+            <pre id="quickstart-code">rtk python -m unittest discover -s tests
+
+$run = "$env:TEMP\systemtraders3-docs-smoke"
+rtk python -m system_trading_s3.input_audit tests/fixtures/valid_multisymbol
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json --export-dir $run --run-id docs-smoke --overwrite
+rtk python -m system_trading_s3.validate_run $run
+rtk python -m system_trading_s3.metrics $run
+rtk python -m system_trading_s3.factor_report $run
+rtk python -m system_trading_s3.factor_attribution $run
+rtk python -m system_trading_s3.factor_risk_model $run
+rtk python -m system_trading_s3.loss_classification $run</pre>
+          </div>
+
+          <div class="checklist" aria-label="빠른 시작 체크리스트">
+            <label class="check"><input type="checkbox"> <span>프로젝트 루트에서 명령을 실행했다.</span></label>
+            <label class="check"><input type="checkbox"> <span><code>simulate</code>에 <code>--export-dir</code>를 지정했다.</span></label>
+            <label class="check"><input type="checkbox"> <span><code>validate_run</code>이 <code>PASS</code> 또는 설명 가능한 상태로 끝났다.</span></label>
+            <label class="check"><input type="checkbox"> <span><code>metrics.json</code>, <code>factor_attribution.json</code>, <code>loss_classification.json</code>을 확인했다.</span></label>
+            <label class="check"><input type="checkbox"> <span><code>factor_risk_model.json</code>이 <code>INCONCLUSIVE</code>여도 데이터 부족이면 정상이라는 점을 확인했다.</span></label>
+          </div>
+        </div>
+      </section>
+
+      <section id="dashboard" class="section">
+        <div class="stack">
+          <div class="split">
+            <div class="card">
+              <h2>로컬 대시보드 사용</h2>
+              <p>대시보드는 기존 run을 보고, fixture/drop-in dataset과 config를 골라 새 simulated run을 만들 수 있는 로컬 UI입니다.</p>
+              <p>서버는 Python stdlib 기반이지만, 브라우저 UI는 Chart.js, Lucide, font를 CDN에서 불러옵니다.</p>
+            </div>
+            <div class="callout warning">
+              <h3>overwrite 주의</h3>
+              <p>기존 run artifact directory는 기본적으로 덮어쓰지 않습니다. 같은 run id를 다시 쓰려면 UI에서 overwrite를 명시해야 합니다.</p>
+            </div>
+          </div>
+
+          <div class="command">
+            <div class="command-head">
+              <span>대시보드 실행</span>
+              <button class="copy-btn" data-copy="dashboard-code">복사</button>
+            </div>
+            <pre id="dashboard-code">rtk python dashboard/server.py
+
+# 브라우저에서 열기
+# http://localhost:8000</pre>
+          </div>
+
+          <div class="card-grid">
+            <div class="card">
+              <h3>왼쪽 run 목록</h3>
+              <p><code>runs/</code> 아래 run directory를 읽습니다. audit status, strategy, return을 빠르게 봅니다.</p>
+            </div>
+            <div class="card">
+              <h3>새 run 만들기</h3>
+              <p>dataset, config, strategy preset, parameter를 선택하고 run id를 지정합니다. inline JSON 편집도 가능합니다.</p>
+            </div>
+            <div class="card">
+              <h3>상세 화면</h3>
+              <p>equity/drawdown chart, trades, audit gaps, factor risk model status를 확인합니다.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="cli" class="section">
+        <div class="stack">
+          <div class="tabs" role="tablist" aria-label="CLI 명령 묶음">
+            <button class="tab active" data-cli-tab="fixture">Fixture run</button>
+            <button class="tab" data-cli-tab="dropin">Drop-in dataset</button>
+            <button class="tab" data-cli-tab="audit">Audit only</button>
+            <button class="tab" data-cli-tab="offline">Offline smoke</button>
+          </div>
+
+          <div class="cli-panel" data-cli-panel="fixture">
+            <div class="command">
+              <div class="command-head"><span>테스트 fixture로 전체 파이프라인 실행</span><button class="copy-btn" data-copy="cli-fixture">복사</button></div>
+              <pre id="cli-fixture">$run = "$env:TEMP\systemtraders3-fixture-run"
+rtk python -m system_trading_s3.simulate tests/fixtures/valid_multisymbol --config tests/fixtures/sample_config.json --export-dir $run --run-id fixture-run --overwrite
+rtk python -m system_trading_s3.validate_run $run
+rtk python -m system_trading_s3.metrics $run
+rtk python -m system_trading_s3.factor_report $run
+rtk python -m system_trading_s3.factor_attribution $run
+rtk python -m system_trading_s3.factor_risk_model $run
+rtk python -m system_trading_s3.loss_classification $run</pre>
+            </div>
+          </div>
+
+          <div class="cli-panel" data-cli-panel="dropin" hidden>
+            <div class="command">
+              <div class="command-head"><span>drop-in synthetic US tech 100 dataset 실행</span><button class="copy-btn" data-copy="cli-dropin">복사</button></div>
+              <pre id="cli-dropin">$run = "$env:TEMP\systemtraders3-us-tech-demo"
+rtk python -m system_trading_s3.input_audit datasets/us_tech_100_simulated
+rtk python -m system_trading_s3.simulate datasets/us_tech_100_simulated --config configs/strategies/periodic_momentum_top10.json --export-dir $run --run-id us-tech-demo --overwrite
+rtk python -m system_trading_s3.validate_run $run
+rtk python -m system_trading_s3.metrics $run
+rtk python -m system_trading_s3.factor_report $run
+rtk python -m system_trading_s3.factor_attribution $run
+rtk python -m system_trading_s3.factor_risk_model $run
+rtk python -m system_trading_s3.loss_classification $run</pre>
+            </div>
+          </div>
+
+          <div class="cli-panel" data-cli-panel="audit" hidden>
+            <div class="command">
+              <div class="command-head"><span>입력/출력 감사만 실행</span><button class="copy-btn" data-copy="cli-audit">복사</button></div>
+              <pre id="cli-audit">rtk python -m system_trading_s3.input_audit datasets/us_tech_100_simulated
+rtk python -m system_trading_s3.audit tests/fixtures/valid_minimal
+rtk python -m system_trading_s3.audit --strict tests/fixtures/valid_minimal</pre>
+            </div>
+          </div>
+
+          <div class="cli-panel" data-cli-panel="offline" hidden>
+            <div class="command">
+              <div class="command-head"><span>네트워크 없이 downloader contract 확인</span><button class="copy-btn" data-copy="cli-offline">복사</button></div>
+              <pre id="cli-offline">$dataset = "$env:TEMP\systemtraders3-offline-smoke"
+rtk python scripts/download_data.py --offline-smoke --output-dir $dataset
+rtk python -m system_trading_s3.input_audit $dataset
+rtk python -m system_trading_s3.simulate $dataset --config tests/fixtures/sample_config.json</pre>
+            </div>
+          </div>
+
+          <div class="callout">
+            <h3><code>rtk</code>가 없다면</h3>
+            <p>이 저장소의 문서는 <code>rtk python</code> 형식을 사용합니다. 환경에 따라 같은 명령을 <code>python</code>으로 바꿔 실행할 수 있습니다.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="artifacts" class="section">
+        <div class="stack">
+          <div class="card">
+            <h2>산출물 파일 해석</h2>
+            <p>아래 파일을 선택하면 역할과 주의점을 볼 수 있습니다. 생성되지 않는 선택 파일은 실패가 아니라 gap일 수 있습니다.</p>
+            <input class="search" id="artifactSearch" placeholder="파일명 또는 설명 검색">
+          </div>
+          <div class="split">
+            <div class="artifact-grid" id="artifactGrid"></div>
+            <div class="artifact-detail" id="artifactDetail">
+              <h3>파일을 선택하세요</h3>
+              <p>run directory 안의 artifact를 누르면 설명이 표시됩니다.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="status" class="section">
+        <div class="stack">
+          <div class="status-board">
+            <div class="status-card pass">
+              <h2>PASS</h2>
+              <p>필수 파일과 필드가 유효하고, 해당 계층에서 필수 조건이 충족된 상태입니다.</p>
+              <span class="pill green">계속 진행 가능</span>
+            </div>
+            <div class="status-card inconclusive">
+              <h2>INCONCLUSIVE</h2>
+              <p>필수 구조는 대체로 유효하지만 benchmark, factor, cost, 표본 수 같은 선택 또는 분석 조건이 부족한 상태입니다.</p>
+              <span class="pill amber">가짜 숫자 대신 보류</span>
+            </div>
+            <div class="status-card fail">
+              <h2>FAIL</h2>
+              <p>필수 파일, header, timestamp 순서, 숫자, enum, accounting replay 등에서 오류가 난 상태입니다.</p>
+              <span class="pill red">먼저 수정 필요</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>risk model 상태 선택기</h2>
+            <p>현재 demo run처럼 factor가 하나뿐이고 관측치가 적으면 risk model은 정상적으로 <code>INCONCLUSIVE</code>를 냅니다.</p>
+            <div class="tabs">
+              <button class="tab active" data-risk="demo">Demo shape</button>
+              <button class="tab" data-risk="ready">Enough data</button>
+              <button class="tab" data-risk="broken">Broken input</button>
+            </div>
+            <div id="riskExplanation" class="callout warning"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="limits" class="section">
+        <div class="stack">
+          <div class="callout danger">
+            <h2>이 프로그램의 가장 중요한 한계</h2>
+            <p>SystemTraderS3는 simulated-only입니다. 어떤 전략도 수익성 있다고 주장하지 않으며, 실제 주문을 넣거나 broker/exchange와 연결하지 않습니다.</p>
+          </div>
+
+          <details open>
+            <summary>실거래 관련 한계</summary>
+            <div>
+              <p>live trading, broker API, exchange API, real order placement, leverage automation은 없습니다. 대시보드에서 실행하는 것도 로컬 시뮬레이션입니다.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>데이터 관련 한계</summary>
+            <div>
+              <p><code>datasets/us_tech_100_simulated</code>는 synthetic fixture data입니다. Yahoo downloader는 optional dependency인 <code>yfinance</code>, <code>pandas</code>와 네트워크가 필요합니다.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>전략과 체결 관련 한계</summary>
+            <div>
+              <p>현재 전략은 등록된 preset catalog에 한정됩니다. execution은 deterministic fill, capped partial fill, carry-forward residual 정도이며 exchange queue, time priority, 실제 유동성은 모델링하지 않습니다.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>metrics와 attribution 한계</summary>
+            <div>
+              <p>per-symbol metrics는 trade-realization summary입니다. portfolio equity attribution은 여전히 portfolio-level입니다. factor attribution은 deterministic proxy와 PnL reconciliation이지 수익 예측이 아닙니다.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>통계 factor risk model 한계</summary>
+            <div>
+              <p><code>factor_risk_model.json</code>은 적어도 두 개 factor와 충분한 complete observations, 식별 가능한 OLS design matrix가 있을 때만 계수를 냅니다. 부족하면 <code>INCONCLUSIVE</code>가 올바른 결과입니다.</p>
+            </div>
+          </details>
+
+          <details>
+            <summary>대시보드 한계</summary>
+            <div>
+              <p>대시보드는 로컬 실험용 UI입니다. production dashboard가 아니며 CDN asset 의존성이 있습니다.</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section id="recipes" class="section">
+        <div class="stack">
+          <div class="card">
+            <h2>상황별 판단 레시피</h2>
+            <p>문제가 생겼을 때는 결과 숫자보다 artifact와 status를 먼저 보세요.</p>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>상황</th>
+                <th>먼저 볼 것</th>
+                <th>해석</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>run이 이상하게 좋아 보임</td>
+                <td><code>run_manifest.json</code>, <code>metrics.json</code>, sample-size gap</td>
+                <td>수익성 판단 전에 데이터가 synthetic인지, row 수가 너무 적은지, benchmark가 있는지 확인합니다.</td>
+              </tr>
+              <tr>
+                <td><code>INCONCLUSIVE</code>가 나옴</td>
+                <td><code>gaps</code> 목록</td>
+                <td>대부분 선택 데이터 부족입니다. 실패가 아니라 "이 분석은 여기서 멈춰야 한다"는 신호입니다.</td>
+              </tr>
+              <tr>
+                <td>factor model 계수가 없음</td>
+                <td><code>factor_risk_model.json</code></td>
+                <td>factor 수, 관측치 수, complete row, singular matrix 조건을 확인합니다. 얇은 데이터에서 계수를 만들면 안 됩니다.</td>
+              </tr>
+              <tr>
+                <td>체결이 예상과 다름</td>
+                <td><code>orders.csv</code>, <code>order_events.csv</code>, <code>fills.csv</code>, <code>risk_events.csv</code></td>
+                <td>partial fill, residual carry-forward, risk rejection, cooldown 여부를 순서대로 봅니다.</td>
+              </tr>
+              <tr>
+                <td>전략 설정이 적용되지 않은 것 같음</td>
+                <td><code>run_manifest.json</code>, config JSON, dashboard strategy form</td>
+                <td>등록된 strategy name과 parameter만 유효합니다. 알 수 없는 key는 작동한 척하지 않고 거부됩니다.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">복사했습니다.</div>
+
+  <script>
+    const artifacts = [
+      {
+        name: 'run_manifest.json',
+        group: '필수',
+        summary: 'run id, strategy, dataset, input audit status, schema version을 기록합니다.',
+        detail: '가장 먼저 확인할 파일입니다. 어떤 dataset과 strategy config로 run이 만들어졌는지 확인합니다.'
+      },
+      {
+        name: 'equity_curve.csv',
+        group: '필수',
+        summary: '기간별 equity, benchmark equity, last prices, position quantities를 담습니다.',
+        detail: 'metrics, factor attribution, validation의 핵심 입력입니다. benchmark가 없으면 benchmark columns는 비거나 없을 수 있습니다.'
+      },
+      {
+        name: 'trades.csv',
+        group: '필수',
+        summary: '체결 이후 trade-level 요약입니다.',
+        detail: 'realized_pnl이 없는 row는 metrics에서 gap으로 남을 수 있습니다. 모든 PnL을 억지로 추정하지 않습니다.'
+      },
+      {
+        name: 'orders.csv',
+        group: '필수',
+        summary: '전략 또는 rebalancer가 만든 order intent입니다.',
+        detail: '실제 계좌 변경은 fills와 account replay로 확인합니다. intent와 fill은 분리되어 있습니다.'
+      },
+      {
+        name: 'order_events.csv',
+        group: '필수',
+        summary: 'accepted, filled, partially_filled, cancelled lifecycle event입니다.',
+        detail: 'partial fill이나 carry-forward residual을 검증할 때 중요합니다.'
+      },
+      {
+        name: 'risk_events.csv',
+        group: '필수',
+        summary: 'risk rule adjustment 또는 rejection 기록입니다.',
+        detail: 'max position weight, cash buffer, max order notional, cooldown, drawdown kill switch가 영향을 줬는지 확인합니다.'
+      },
+      {
+        name: 'fills.csv',
+        group: '필수',
+        summary: '실제 simulated fill rows입니다.',
+        detail: 'fees, slippage, quantity, price가 metrics와 replay validation에 쓰입니다.'
+      },
+      {
+        name: 'account_summary.json',
+        group: '필수',
+        summary: '최종 cash, positions, equity, friction totals입니다.',
+        detail: 'validate_run은 이 값과 replay 결과를 비교합니다.'
+      },
+      {
+        name: 'audit_summary.json',
+        group: '필수',
+        summary: 'export artifact 자체의 structural audit 결과입니다.',
+        detail: 'PASS, INCONCLUSIVE, FAIL과 issues를 확인합니다.'
+      },
+      {
+        name: 'benchmark.csv',
+        group: '선택',
+        summary: 'benchmark equity가 있을 때 period return rows를 씁니다.',
+        detail: 'source benchmark가 없으면 생성되지 않을 수 있습니다. 이 경우 benchmark-relative metrics가 제한됩니다.'
+      },
+      {
+        name: 'factor_exposure.csv',
+        group: '선택',
+        summary: 'held positions와 factor data가 있을 때 holding exposure rows를 씁니다.',
+        detail: 'factor data 또는 held positions가 없으면 gap으로 남습니다.'
+      },
+      {
+        name: 'metrics.json',
+        group: '분석',
+        summary: 'return, CAGR, drawdown, Sortino, turnover, benchmark-relative metrics입니다.',
+        detail: '표본 수가 작으면 annualized metrics에 gap이 붙습니다. 수익성 보장이 아닙니다.'
+      },
+      {
+        name: 'factor_report.json',
+        group: '분석',
+        summary: 'buy-side factor exposure와 holding-period factor exposure를 보고합니다.',
+        detail: '의도한 factor 방향으로 매수/보유됐는지 보는 얇은 리포트입니다.'
+      },
+      {
+        name: 'factor_attribution.json',
+        group: '분석',
+        summary: 'factor-return proxy, residual return, PnL reconciliation입니다.',
+        detail: 'holdings, fills, prices, factor ranks를 연결합니다. statistical regression model은 아닙니다.'
+      },
+      {
+        name: 'factor_risk_model.json',
+        group: '분석',
+        summary: '충분성 gate가 있는 deterministic OLS factor risk model입니다.',
+        detail: '두 개 이상 factor와 충분한 complete observations가 없으면 INCONCLUSIVE입니다. 예측 모델이 아닙니다.'
+      },
+      {
+        name: 'loss_classification.json',
+        group: '분석',
+        summary: 'benchmark-relative loss period classification입니다.',
+        detail: 'NO_LOSS, BENCHMARK_EXPLAINED_LOSS, EXCESS_RELATIVE_LOSS, STRATEGY_SPECIFIC_LOSS, UNEXPLAINED_LOSS_DATA_GAP을 구분합니다.'
+      }
+    ];
+
+    const riskTexts = {
+      demo: {
+        className: 'callout warning',
+        html: '<h3>Demo shape: INCONCLUSIVE가 정상</h3><p>factor가 하나뿐이거나 관측치가 적으면 OLS 계수를 만들지 않습니다. 현재 demo run처럼 factor_count=1, observation_count=2이면 부족한 조건을 gaps에 남깁니다.</p>'
+      },
+      ready: {
+        className: 'callout good',
+        html: '<h3>Enough data: PASS 가능</h3><p>두 개 이상 factor, 충분한 complete observations, singular하지 않은 design matrix가 있으면 intercept와 factor coefficients, R2, residual summary를 씁니다.</p>'
+      },
+      broken: {
+        className: 'callout danger',
+        html: '<h3>Broken input: FAIL 또는 INCONCLUSIVE</h3><p>factor_attribution.json이 깨졌거나 periods 구조가 잘못되면 FAIL입니다. 파일이 없거나 데이터가 얇으면 INCONCLUSIVE입니다.</p>'
+      }
+    };
+
+    function setSection(sectionId) {
+      document.querySelectorAll('.section').forEach(section => {
+        section.classList.toggle('active', section.id === sectionId);
+      });
+      document.querySelectorAll('.nav button').forEach(button => {
+        button.classList.toggle('active', button.dataset.section === sectionId);
+      });
+      history.replaceState(null, '', '#' + sectionId);
+    }
+
+    function copyText(id) {
+      const target = document.getElementById(id);
+      if (!target) return;
+      const text = target.textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(showToast);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+        showToast();
+      }
+    }
+
+    function showToast() {
+      const toast = document.getElementById('toast');
+      toast.classList.add('show');
+      window.setTimeout(() => toast.classList.remove('show'), 1200);
+    }
+
+    function setCliTab(name) {
+      document.querySelectorAll('[data-cli-tab]').forEach(button => {
+        button.classList.toggle('active', button.dataset.cliTab === name);
+      });
+      document.querySelectorAll('[data-cli-panel]').forEach(panel => {
+        panel.hidden = panel.dataset.cliPanel !== name;
+      });
+    }
+
+    function setRisk(name) {
+      document.querySelectorAll('[data-risk]').forEach(button => {
+        button.classList.toggle('active', button.dataset.risk === name);
+      });
+      const target = document.getElementById('riskExplanation');
+      const item = riskTexts[name];
+      target.className = item.className;
+      target.innerHTML = item.html;
+    }
+
+    function renderArtifacts(filter = '') {
+      const grid = document.getElementById('artifactGrid');
+      const detail = document.getElementById('artifactDetail');
+      const normalized = filter.trim().toLowerCase();
+      const visible = artifacts.filter(item => {
+        return [item.name, item.group, item.summary, item.detail].join(' ').toLowerCase().includes(normalized);
+      });
+      grid.innerHTML = visible.map((item, index) => `
+        <button class="artifact" data-artifact-index="${artifacts.indexOf(item)}">
+          <div class="artifact-name">${item.name}</div>
+          <div><span class="pill">${item.group}</span></div>
+          <p style="margin-top: 8px;">${item.summary}</p>
+        </button>
+      `).join('');
+      if (!visible.length) {
+        detail.innerHTML = '<h3>검색 결과 없음</h3><p>다른 파일명이나 설명을 입력해 보세요.</p>';
+        return;
+      }
+      const first = visible[0];
+      detailArtifact(artifacts.indexOf(first));
+    }
+
+    function detailArtifact(index) {
+      const item = artifacts[index];
+      const detail = document.getElementById('artifactDetail');
+      document.querySelectorAll('.artifact').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.artifactIndex) === index);
+      });
+      detail.innerHTML = `
+        <div class="pill-row"><span class="pill">${item.group}</span></div>
+        <h2 style="margin-top: 10px;">${item.name}</h2>
+        <p>${item.summary}</p>
+        <div class="callout"><p>${item.detail}</p></div>
+      `;
+    }
+
+    document.querySelectorAll('.nav button').forEach(button => {
+      button.addEventListener('click', () => setSection(button.dataset.section));
+    });
+
+    document.querySelectorAll('.copy-btn').forEach(button => {
+      button.addEventListener('click', () => copyText(button.dataset.copy));
+    });
+
+    document.querySelectorAll('[data-cli-tab]').forEach(button => {
+      button.addEventListener('click', () => setCliTab(button.dataset.cliTab));
+    });
+
+    document.querySelectorAll('[data-risk]').forEach(button => {
+      button.addEventListener('click', () => setRisk(button.dataset.risk));
+    });
+
+    document.getElementById('artifactSearch').addEventListener('input', event => {
+      renderArtifacts(event.target.value);
+    });
+
+    document.getElementById('artifactGrid').addEventListener('click', event => {
+      const button = event.target.closest('[data-artifact-index]');
+      if (button) detailArtifact(Number(button.dataset.artifactIndex));
+    });
+
+    const initialSection = location.hash ? location.hash.slice(1) : 'overview';
+    if (document.getElementById(initialSection)) {
+      setSection(initialSection);
+    }
+    renderArtifacts();
+    setRisk('demo');
+  </script>
+</body>
+</html>

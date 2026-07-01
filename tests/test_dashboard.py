@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from http.server import HTTPServer
 from pathlib import Path
@@ -27,11 +28,21 @@ class DashboardApiTests(unittest.TestCase):
         dashboard_server.RUNS_DIR = ROOT / "runs"
         with self._running_server() as base_url:
             payload = self._get_json(f"{base_url}/api/runs")
+            details = self._get_json(f"{base_url}/api/runs/demo-run")
         runs_by_id = {item["run_id"]: item for item in payload["runs"]}
         run_ids = set(runs_by_id)
         self.assertIn("demo-run", run_ids)
-        self.assertEqual("INCONCLUSIVE", runs_by_id["demo-run"]["audit_status"])
+        self.assertEqual("PASS", runs_by_id["demo-run"]["audit_status"])
+        self.assertEqual("INCONCLUSIVE", runs_by_id["demo-run"]["input_audit_status"])
         self.assertEqual("tests\\fixtures\\valid_multisymbol", runs_by_id["demo-run"]["dataset"])
+        self.assertEqual(6, len(details["order_events"]))
+        self.assertEqual(0, len(details["risk_events"]))
+        self.assertIn("factor_report", details)
+        self.assertIn("factor_attribution", details)
+        self.assertIn("factor_risk_model", details)
+        self.assertEqual("mvp14.factor_risk_model.v1", details["factor_risk_model"]["schema_version"])
+        self.assertEqual("INCONCLUSIVE", details["factor_risk_model"]["status"])
+        self.assertIn("loss_classification", details)
 
     def test_dashboard_lists_drop_in_datasets_and_strategy_configs(self) -> None:
         with self._running_server() as base_url:
@@ -53,9 +64,10 @@ class DashboardApiTests(unittest.TestCase):
 
         strategies = {item["name"]: item for item in payload["strategies"]}
         self.assertEqual(
-            {"BuyAndHold", "MovingAverageCross", "EqualWeightRebalance", "PeriodicFactorWeight"},
+            {"BuyAndHold", "MovingAverageCross", "EqualWeightRebalance", "PeriodicFactorWeight", "RoundTripBuyAndHold"},
             set(strategies),
         )
+        self.assertEqual([], strategies["RoundTripBuyAndHold"]["params"])
         periodic_param_names = {item["name"] for item in strategies["PeriodicFactorWeight"]["params"]}
         self.assertEqual({"factor_name", "rebalance_interval", "top_k"}, periodic_param_names)
         self.assertEqual("momentum", strategies["PeriodicFactorWeight"]["params"][0]["default"])
@@ -73,9 +85,19 @@ class DashboardApiTests(unittest.TestCase):
             "function populateStrategySelect()",
             "function syncStrategyFormToJson()",
             "function buildConfigFromStrategyForm()",
+            "function formatMetric(",
+            "data.manifest.dataset_dir",
+            "m.turnover?.turnover_ratio",
+            "Artifact Audit:",
+            "Input Audit:",
+            "auditSummary.issues",
+            "Factor Risk Model",
+            "factorRiskModelContainer",
+            "function renderFactorRiskModel(",
         ]
         for fragment in required_fragments:
             self.assertIn(fragment, html)
+        self.assertIn('id="overwriteExistingRun"', html)
 
     def test_dashboard_simulate_endpoint_exports_and_metrics_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +115,10 @@ class DashboardApiTests(unittest.TestCase):
             self.assertEqual(True, payload["success"])
             self.assertTrue((run_dir / "run_manifest.json").is_file())
             self.assertTrue((run_dir / "metrics.json").is_file())
+            self.assertTrue((run_dir / "factor_report.json").is_file())
+            self.assertTrue((run_dir / "factor_attribution.json").is_file())
+            self.assertTrue((run_dir / "factor_risk_model.json").is_file())
+            self.assertTrue((run_dir / "loss_classification.json").is_file())
 
     def test_dashboard_simulate_endpoint_accepts_inline_strategy_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -117,6 +143,36 @@ class DashboardApiTests(unittest.TestCase):
             self.assertEqual(True, payload["success"])
             self.assertEqual("PeriodicFactorWeight", manifest["strategy_name"])
             self.assertEqual("datasets\\us_tech_100_simulated", manifest["dataset_dir"])
+            self.assertEqual("PASS", manifest["input_audit_status"])
+
+    def test_dashboard_simulate_endpoint_requires_explicit_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dashboard_server.RUNS_DIR = Path(tmp) / "runs"
+            run_dir = dashboard_server.RUNS_DIR / "existing-run"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run_manifest.json").write_text("{}\n", encoding="utf-8")
+            with self._running_server() as base_url:
+                status, duplicate_payload = self._post_json_status(
+                    f"{base_url}/api/simulate",
+                    {
+                        "dataset_name": "valid_multisymbol",
+                        "config_name": "sample_config.json",
+                        "run_id": "existing-run",
+                    },
+                )
+                replacement_payload = self._post_json(
+                    f"{base_url}/api/simulate",
+                    {
+                        "dataset_name": "valid_multisymbol",
+                        "config_name": "sample_config.json",
+                        "run_id": "existing-run",
+                        "overwrite": True,
+                    },
+                )
+
+        self.assertEqual(409, status)
+        self.assertIn("already exists", duplicate_payload["error"])
+        self.assertEqual(True, replacement_payload["success"])
 
     def _running_server(self):
         testcase = self
@@ -161,6 +217,22 @@ class DashboardApiTests(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=10) as response:
             self.assertEqual(200, response.status)
             return json.loads(response.read().decode("utf-8"))
+
+    def _post_json_status(self, url: str, payload: dict) -> tuple[int, dict]:
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            try:
+                return error.code, json.loads(error.read().decode("utf-8"))
+            finally:
+                error.close()
 
 
 class DownloadDataScriptTests(unittest.TestCase):
